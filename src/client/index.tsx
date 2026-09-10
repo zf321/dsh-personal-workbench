@@ -418,7 +418,7 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       }
       const ws = runtime.workspaces.list.getSnapshot()
       let workspaceId = ws.items[0]?.workspaceId
-      const hostHome = runtime.connection?.generation.getSnapshot()?.host.home
+      const hostHome = hostHomeOf(runtime)
       const isWsl = hostHome !== undefined
         ? isWslStylePath(hostHome)
         : ws.items.some((item) => typeof item.path === 'string' && isWslStylePath(item.path))
@@ -1997,6 +1997,18 @@ function newSessionButton(root: HTMLElement): HTMLButtonElement | undefined {
 }
 function conversationColumn(): HTMLElement | undefined {
   return document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]') ?? undefined
+}
+
+/**
+ * 宿主家目录（WSL 路径风格判断用）：新宿主由 connection.generation 提供（host.home 嵌套）；
+ * 旧宿主（如 0.1.1-rc.2）没有 generation，host.describe 快照的 home 在顶层。
+ * 两代取值均不可用时返回 undefined，回退到工作区路径启发式判断。
+ */
+function hostHomeOf(runtime: WorkbenchRuntime): string | undefined {
+  const viaGeneration = runtime.connection?.generation?.getSnapshot?.()?.host?.home
+  if (typeof viaGeneration === 'string' && viaGeneration !== '') return viaGeneration
+  const viaDescription = runtime.connection?.hostDescription?.getSnapshot?.()?.home
+  return typeof viaDescription === 'string' && viaDescription !== '' ? viaDescription : undefined
 }
 
 /**

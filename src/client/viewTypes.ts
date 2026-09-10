@@ -80,9 +80,14 @@ export interface WorkbenchRuntime {
   }
   // cordis Context 的服务软读取：无 inject 要求，服务缺失返回 undefined。
   get?(name: string): unknown
+  // 旧宿主（如 0.1.1-rc.2）：connection 无 generation，host.describe 快照的 home 在顶层；
+  // 新宿主：connection.generation.getSnapshot() 返回 { host: { home } }。
   connection?: {
-    generation: {
+    generation?: {
       getSnapshot(): { host: { home: string } } | undefined
+    }
+    hostDescription?: {
+      getSnapshot(): { home?: string } | undefined
     }
   }
 }
