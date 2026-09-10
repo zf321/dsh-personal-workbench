@@ -7,22 +7,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { createDictionaryEntry, deleteDictionaryEntry, listDictionaries, updateDictionaryEntry } from '../db/repo.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext } from './routes/helpers.js'
 
 const DICTIONARIES_PREFIX = '/api/workbench/dictionaries'
-
-function isLoopbackRequest(req: IncomingMessage): boolean {
-  const address = req.socket.remoteAddress
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  const host = req.headers.host
-  if (typeof host !== 'string') return false
-  let url: URL
-  try { url = new URL(`http://${host}`) } catch { return false }
-  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost' && url.hostname !== '[::1]') return false
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers.origin
-  if (origin === undefined) return true
-  try { return new URL(origin).host === url.host } catch { return false }
-}
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'referrer-policy': 'no-referrer' })
@@ -55,7 +42,9 @@ export function makeDictionaryRoute(db: DatabaseSync): WebRoute {
     kind: 'prefix',
     path: DICTIONARIES_PREFIX,
     handler: async (req, res) => {
-      if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+      const auth = await authenticateWorkbenchRequest(req)
+      if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+      enterWorkbenchAuthContext(auth)
       const url = new URL(req.url ?? '/', 'http://localhost')
       const segments = pathSegments(url, DICTIONARIES_PREFIX)
       const method = req.method ?? 'GET'

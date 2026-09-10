@@ -6,6 +6,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DatabaseSync } from 'node:sqlite'
 import { addTaskMemory, assertValidFileLink, createDraft, getDeferredDraftForTask, getDictionary, getDraft, getIdea, getIdeaCluster, getPendingDailyPlanDraft, getPendingDraftForSession, getPendingDraftForTask, getPendingKnowledgeDraft, getPendingReportDraft, getTask, listTaskEvents, localDateString, updateDraft, updateTask } from './db/repo.js'
+import { isInside, resolveTenantUserByCwd } from './tenant/workspace-map.js'
 
 function text(value: string): ContentBlock[] {
   return [{ type: 'text', text: value }]
@@ -85,6 +86,12 @@ export function submitTaskTool(db: DatabaseSync) {
       const reminderOffset = typeof args.reminder_offset_minutes === 'number'
         ? args.reminder_offset_minutes
         : typeDefault ?? priorityDefault
+      const workspacePath = str(args.workspace_path) ?? exec.agent?.session?.header?.cwd ?? null
+      // 多租户约束：会话属于某用户时，任务工作区不得越出其工作区（fail closed）。
+      const routedUser = resolveTenantUserByCwd(exec.agent?.session?.header?.cwd)
+      if (routedUser !== undefined && workspacePath !== null && !isInside(routedUser.workspacePath, workspacePath)) {
+        return `错误：workspace_path「${workspacePath}」超出你的工作区范围（${routedUser.workspacePath}），请改用工作区内路径或留空。`
+      }
       const payload: Record<string, unknown> = {
         title,
         description: str(args.description) ?? '',
@@ -97,7 +104,7 @@ export function submitTaskTool(db: DatabaseSync) {
         aiPolicyCode,
         reminderOffsetMinutes: reminderOffset ?? null,
         parentId: str(args.parent_id) ?? null,
-        workspacePath: str(args.workspace_path) ?? exec.agent?.session?.header?.cwd ?? null,
+        workspacePath,
         subtasks: args.subtasks ?? [],
         extra: args.extra ?? {},
         source: 'nl',

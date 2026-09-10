@@ -6,7 +6,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { getTaskReport, listTaskReports, deleteTaskReport } from '../../db/repo.js'
 import type { ReportPeriodCode } from '../../db/repo.js'
-import { REPORTS_PREFIX, isLoopbackRequest, pathSegments, readJsonBody, reportContext, writeJson } from './helpers.js'
+import { REPORTS_PREFIX, authenticateWorkbenchRequest, enterWorkbenchAuthContext, pathSegments, readJsonBody, reportContext, writeJson } from './helpers.js'
 
 export function makeReportRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -14,7 +14,9 @@ export function makeReportRoutes(db: DatabaseSync): WebRoute[] {
       kind: 'prefix',
       path: REPORTS_PREFIX,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, REPORTS_PREFIX)
         const method = req.method ?? 'GET'

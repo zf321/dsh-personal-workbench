@@ -1,13 +1,16 @@
 /**
- * 路由层共享工具：请求围栏、响应、路径、时间区间、任务序列化。
+ * 路由层共享工具：请求围栏（本机回环 / 多租户 token 委托验证）、响应、路径、时间区间、任务序列化。
  *
  * 从 routes.ts 原样抽出（不改行为），供按域拆分的路由模块共用。
  * 所有函数显式接收 db / req / res，便于单测与复用。
  */
+import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { enterWorkbenchUserDb, isSafeUserSlug } from '../../db/pool.js'
+import { isInside } from '../../tenant/workspace-map.js'
 import {
   ensureRecurringInstances, getDailyPlan, getDictionary, getTask, listTasks, localDateString,
   type ReportPeriodCode, type TaskInput,
@@ -36,6 +39,129 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
   const origin = req.headers.origin
   if (origin === undefined) return true
   try { return new URL(origin).host === url.host } catch { return false }
+}
+
+/** 宿主多租户插件 /projects/api/whoami 返回的用户形状（workbench 用到的子集）。 */
+export interface WorkbenchUser {
+  slug: string
+  name: string
+  role: string
+  /** 用户工作区绝对路径；管理员为 null。 */
+  workspacePath: string | null
+  projectSlug: string | null
+  projectName: string | null
+}
+
+/** 工作台请求的鉴权结果：本机回环（走默认单用户库）或已认证的多租户用户。 */
+export type WorkbenchAuth = { kind: 'loopback' } | { kind: 'user'; user: WorkbenchUser }
+
+/** token 验证结果缓存：TTL 内同一 token 只回源一次 whoami（含失败负缓存）。 */
+const AUTH_CACHE_TTL_MS = 30_000
+const AUTH_CACHE_MAX_ENTRIES = 512
+const authCache = new Map<string, { expiresAt: number; user: WorkbenchUser | null }>()
+
+/** 从 Authorization 头解析 Bearer token。 */
+function bearerTokenOf(req: IncomingMessage): string | undefined {
+  const header = req.headers.authorization
+  if (typeof header !== 'string') return undefined
+  const match = /^Bearer\s+(\S+)$/i.exec(header.trim())
+  return match?.[1]
+}
+
+/**
+ * 委托宿主多租户插件验证 token：自调用 127.0.0.1 当前端口上的
+ * /projects/api/whoami（本地令牌与 Keycloak 令牌都由该端点识别，
+ * 不复制其验证逻辑）。任何失败（网络/超时/401/形状不符）返回 undefined。
+ */
+async function verifyTokenWithHost(req: IncomingMessage, token: string): Promise<WorkbenchUser | undefined> {
+  const port = req.socket.localPort
+  if (typeof port !== 'number' || port <= 0) return undefined
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/projects/api/whoami`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3000),
+    })
+    if (!response.ok) return undefined
+    const body = (await response.json()) as {
+      user?: { slug?: unknown; name?: unknown; role?: unknown; cwd?: unknown; projectSlug?: unknown; projectName?: unknown }
+    }
+    const user = body.user
+    if (user === undefined) return undefined
+    if (typeof user.slug !== 'string' || typeof user.name !== 'string') return undefined
+    if (user.role !== 'user' && user.role !== 'admin') return undefined
+    return {
+      slug: user.slug,
+      name: user.name,
+      role: user.role,
+      workspacePath: typeof user.cwd === 'string' ? user.cwd : null,
+      projectSlug: typeof user.projectSlug === 'string' ? user.projectSlug : null,
+      projectName: typeof user.projectName === 'string' ? user.projectName : null,
+    }
+  } catch { return undefined }
+}
+
+/**
+ * 工作台请求入口围栏。
+ * - 本机回环请求直通（CLI / 本机工具的既有行为不变）。
+ * - 其余请求必须携带 Bearer token，经宿主多租户插件验证后放行。
+ *   调用方应在 await 本函数后、于同一续体同步调用 enterWorkbenchAuthContext(auth)
+ *   进入该用户库上下文（per-user 隔离，见 db/pool.ts）；回环请求用默认库。
+ * - WORKBENCH_REQUIRE_AUTH_TOKEN=1 时禁用回环直通：用于端口映射/代理部署
+ *   （外部流量在容器内也呈现为回环），所有请求都必须携带有效 token。
+ * 返回 undefined 表示未授权，调用方应返回 401。
+ */
+export async function authenticateWorkbenchRequest(req: IncomingMessage): Promise<WorkbenchAuth | undefined> {
+  if (process.env.WORKBENCH_REQUIRE_AUTH_TOKEN !== '1' && isLoopbackRequest(req)) return { kind: 'loopback' }
+  if (req.headers['sec-fetch-site'] === 'cross-site') return undefined
+  const token = bearerTokenOf(req)
+  if (token === undefined) return undefined
+  const key = createHash('sha256').update(token).digest('hex')
+  const cached = authCache.get(key)
+  if (cached !== undefined && cached.expiresAt > Date.now()) {
+    return cached.user === null ? undefined : { kind: 'user', user: cached.user }
+  }
+  if (authCache.size >= AUTH_CACHE_MAX_ENTRIES) authCache.clear()
+  const verified = await verifyTokenWithHost(req, token)
+  // slug 会作为用户库目录名，形状不符者按未授权处理（fail closed）。
+  const user = verified !== undefined && isSafeUserSlug(verified.slug) ? verified : null
+  authCache.set(key, { expiresAt: Date.now() + AUTH_CACHE_TTL_MS, user })
+  return user === null ? undefined : { kind: 'user', user }
+}
+
+/**
+ * 在路由 handler 的续体里同步进入该请求的库上下文（per-user 隔离）。
+ * AsyncLocalStorage.enterWith 的语义：在被 await 的辅助函数内部（其自身 await
+ * 之后）调用不会传播到调用方——必须由 handler 在 await 鉴权之后的下一行同步调用
+ * （见 pool.test.mjs 的时序回归测试）。回环与未授权（undefined）均无操作。
+ */
+export function enterWorkbenchAuthContext(auth: WorkbenchAuth | undefined): void {
+  if (auth !== undefined && auth.kind === 'user') enterWorkbenchUserDb(auth.user.slug)
+}
+
+/** 请求者的文件访问边界：open=不限制（回环/管理员）；workspace=限定根；denied=无工作区且拒绝。 */
+export type FileBoundary = { mode: 'open' } | { mode: 'denied' } | { mode: 'workspace'; root: string }
+
+/**
+ * 计算请求者的文件访问边界（多租户工作区约束的统一口径）：
+ * - 本机回环与管理员的既有行为不变（open）；
+ * - 项目用户（role=user）限定在其工作区内；工作区缺失时拒绝（fail closed）。
+ */
+export function fileBoundaryOf(auth: WorkbenchAuth | undefined): FileBoundary {
+  if (auth === undefined) return { mode: 'denied' }
+  if (auth.kind === 'loopback') return { mode: 'open' }
+  if (auth.user.role === 'admin') return { mode: 'open' }
+  const workspacePath = auth.user.workspacePath
+  return workspacePath === null || workspacePath === ''
+    ? { mode: 'denied' }
+    : { mode: 'workspace', root: workspacePath }
+}
+
+/** 校验任务/设置里的工作区路径在请求者边界内；越界抛错（消息面向用户/agent）。 */
+export function assertPathWithinBoundary(boundary: FileBoundary, value: string | null | undefined, field: string): void {
+  if (value === null || value === undefined || value.trim() === '') return
+  if (boundary.mode === 'open') return
+  if (boundary.mode === 'denied') throw new Error(`no workspace for this account, cannot set ${field}`)
+  if (!isInside(boundary.root, value)) throw new Error(`${field} is outside your workspace`)
 }
 
 export function writeJson(res: ServerResponse, status: number, body: unknown): void {

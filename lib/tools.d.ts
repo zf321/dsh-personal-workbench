@@ -1,0 +1,12 @@
+import type { DatabaseSync } from 'node:sqlite';
+export declare function submitTaskTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function proposeDailyPlanTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function proposeIdeaClustersTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function submitIdeaTasksTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function submitKnowledgeTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function submitReportTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function proposeSubtasksTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function updateTaskTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function submitReviewTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function requestCompletionTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function saveTaskMemoryTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;

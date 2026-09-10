@@ -9,7 +9,7 @@ import {
   getTask, getTaskMemoryContext, getTaskRootId, linkTaskSession, listArchivedTasks, listChildren, listReminders, listTaskEvents,
   listTaskMemories, listTaskReviews, listTaskSessions, listTasks, repairParentCompletion, restoreTask, updateTask, updateTaskWithCompletion,
 } from '../../db/repo.js'
-import { TASKS_PREFIX, defaultRecurrenceRule, isLoopbackRequest, pathSegments, publicTask, readJsonBody, requireCode, taskInputFromBody, todayRange, writeJson } from './helpers.js'
+import { assertPathWithinBoundary, authenticateWorkbenchRequest, defaultRecurrenceRule, enterWorkbenchAuthContext, fileBoundaryOf, pathSegments, publicTask, readJsonBody, requireCode, TASKS_PREFIX, taskInputFromBody, todayRange, writeJson } from './helpers.js'
 
 export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -17,7 +17,9 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
       kind: 'prefix',
       path: TASKS_PREFIX,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, TASKS_PREFIX)
         const method = req.method ?? 'GET'
@@ -36,6 +38,7 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
             try {
               const input = taskInputFromBody(body)
               if (input.title.trim() === '') throw new Error('title is required')
+              assertPathWithinBoundary(fileBoundaryOf(auth), input.workspacePath, 'workspacePath')
               requireCode(db, 'type', input.typeCode, 'typeCode')
               requireCode(db, 'priority', input.priorityCode, 'priorityCode')
               if (input.statusCode !== undefined) requireCode(db, 'status', input.statusCode, 'statusCode')
@@ -94,7 +97,11 @@ export function makeTaskRoutes(db: DatabaseSync): WebRoute[] {
             if (body.allDay === true || body.allDay === false) patch.allDay = body.allDay
             if ('estimatedMinutes' in body) patch.estimatedMinutes = typeof body.estimatedMinutes === 'number' ? body.estimatedMinutes : null
             if (body.archived === true || body.archived === false) patch.archived = body.archived
-            if ('workspacePath' in body) patch.workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath : null
+            if ('workspacePath' in body) {
+              const value = typeof body.workspacePath === 'string' ? body.workspacePath : null
+              assertPathWithinBoundary(fileBoundaryOf(auth), value, 'workspacePath')
+              patch.workspacePath = value
+            }
             if (typeof body.extra === 'object' && body.extra !== null) patch.extra = body.extra as Record<string, unknown>
             // 新语义：任意节点直接完成时，在同一事务内级联完成未完成子节点，并向上递归聚合父节点。
             const task = updateTaskWithCompletion(db, id, patch)

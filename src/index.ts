@@ -12,13 +12,15 @@ import { makeOpenFileRoute } from './api/openFileRoute.js'
 import { makeRoutes } from './api/routes.js'
 import { makeSkillRoutes } from './api/routes/skills.js'
 import { probeSkills } from './api/skills.js'
-import { openWorkbenchDb, type WorkbenchDbConfig } from './db/database.js'
-import { seedDictionaries } from './db/seed.js'
+import type { WorkbenchDbConfig } from './db/database.js'
+import { bindWorkbenchDbPool, WorkbenchDbPool } from './db/pool.js'
 import { countFiredRemindersSince, countQueue, enqueueReminder, listQueue, markQueueAttempt, readMeta, removeQueueEntry } from './db/repo.js'
 import { probeDshIm, WechatChannelAdapter } from './reminder/adapter.js'
 import { readReminderPolicy, writeReminderPolicy } from './reminder/config.js'
-import { ReminderScheduler } from './reminder/scheduler.js'
+import { ReminderScheduler, type SchedulerScope } from './reminder/scheduler.js'
 import { readWeixinInboundCount } from './reminder/weixin-status.js'
+import { listTenantUsers } from './tenant/workspace-map.js'
+import { withTenantRouting } from './tenant/tool-routing.js'
 import { proposeDailyPlanTool, proposeIdeaClustersTool, proposeSubtasksTool, requestCompletionTool, saveTaskMemoryTool, submitIdeaTasksTool, submitKnowledgeTool, submitReportTool, submitReviewTool, submitTaskTool, updateTaskTool } from './tools.js'
 
 export const name = 'personal-workbench'
@@ -47,8 +49,12 @@ export interface Config extends WorkbenchDbConfig {
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  const db = openWorkbenchDb(config)
-  seedDictionaries(db)
+  // 多租户隔离：默认库服务本机回环；用户库按 slug 懒打开（见 db/pool.ts）。
+  // db 是“当前上下文库”的运行期句柄——路由/工具/调度器仍共用同一个 db 对象，
+  // 鉴权解析出用户后由 AsyncLocalStorage 自动把调用路由到该用户库。
+  const pool = new WorkbenchDbPool(config)
+  bindWorkbenchDbPool(pool)
+  const db = pool.handle()
 
   // 微信提醒通道适配层：ctx.get('dshIm') 软探测，未安装时静默降级。
   const adapter = new WechatChannelAdapter({
@@ -73,6 +79,15 @@ export function apply(ctx: Context, config: Config = {}): void {
     adapter,
     isTargetConfigured: () => adapter.status().configured,
     readInboundCount: () => readWeixinInboundCount(ctx),
+    // 多租户提醒：默认库 + 每个用户库各扫一轮；用户库在 runForUser 上下文中
+    // 自动路由（adapter 的配置读取、队列、事件都落各自用户库）。
+    scopes: () => {
+      const scopes: SchedulerScope[] = [{ label: '(default)', run: (fn) => fn() }]
+      for (const user of listTenantUsers()) {
+        scopes.push({ label: user.slug, run: (fn) => pool.runForUser(user.slug, fn) })
+      }
+      return scopes
+    },
     log: (message) => { ctx.logger?.info?.(message) },
   })
 
@@ -102,7 +117,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.effect(
     () => {
-      const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db), proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db)].map((tool) => ctx.tools.register(tool))
+      // withTenantRouting：按会话 cwd 把工具执行的库调用路由到用户库（多租户）。
+      const disposers = [submitTaskTool(db), proposeSubtasksTool(db), proposeDailyPlanTool(db), submitReportTool(db), submitKnowledgeTool(db), proposeIdeaClustersTool(db), submitIdeaTasksTool(db), updateTaskTool(db), requestCompletionTool(db), submitReviewTool(db), saveTaskMemoryTool(db)].map((tool) => ctx.tools.register(withTenantRouting(tool)))
       return () => { for (const dispose of disposers) dispose() }
     },
     'dsh-personal-workbench: tools',
@@ -128,5 +144,5 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   }, 'dsh-personal-workbench: prompt')
 
-  ctx.effect(() => () => { db.close() }, 'dsh-personal-workbench: db')
+  ctx.effect(() => () => { pool.close() }, 'dsh-personal-workbench: db')
 }

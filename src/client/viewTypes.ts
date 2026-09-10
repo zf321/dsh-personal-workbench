@@ -70,10 +70,16 @@ export interface WorkbenchRuntime {
     list: { getSnapshot(): { items: readonly { workspaceId: string; path?: string }[] } }
     create?(input: { path: string }): Promise<{ workspaceId?: string }>
     openPath?(path: string): Promise<void>
+    // 旧宿主（如 0.1.1-rc.2）：工作区导航能力在 workspaces 服务上；新宿主拆分为独立 uiWorkspace 服务。
+    connectWorkspace?(workspaceId: string): Promise<string>
   }
-  uiWorkspace: {
+  // uiWorkspace 服务仅在较新宿主提供。因未声明注入（旧宿主缺失该服务会导致插件 pending、
+  // 整个界面 boot 失败），该服务只能经 Context 软读取（get），不可直接属性访问（会抛错）。
+  uiWorkspace?: {
     connectWorkspace(workspaceId: string): Promise<string>
   }
+  // cordis Context 的服务软读取：无 inject 要求，服务缺失返回 undefined。
+  get?(name: string): unknown
   connection?: {
     generation: {
       getSnapshot(): { host: { home: string } } | undefined

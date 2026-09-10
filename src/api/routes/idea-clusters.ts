@@ -5,7 +5,7 @@
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { createIdeaCluster, deleteIdeaCluster, getIdeaCluster, listIdeaClusters, listIdeaClustersForIdea } from '../../db/repo.js'
-import { IDEA_CLUSTERS_PREFIX, isLoopbackRequest, pathSegments, readJsonBody, writeJson } from './helpers.js'
+import { IDEA_CLUSTERS_PREFIX, authenticateWorkbenchRequest, enterWorkbenchAuthContext, pathSegments, readJsonBody, writeJson } from './helpers.js'
 
 export function makeIdeaClusterRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -13,7 +13,9 @@ export function makeIdeaClusterRoutes(db: DatabaseSync): WebRoute[] {
       kind: 'prefix',
       path: IDEA_CLUSTERS_PREFIX,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, IDEA_CLUSTERS_PREFIX)
         const method = req.method ?? 'GET'

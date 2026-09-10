@@ -1,5 +1,6 @@
 node_modules/
-lib/
+# lib/ (build output) is committed: erpm-dsh image builds install this fork
+# via a codeload tarball pinned to a commit (no build step at image build time).
 *.tgz
 .pwtest/
 test-results/

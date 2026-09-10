@@ -26,6 +26,16 @@ import { countDraftNotifiesSince, flushDraftNotifications, scanDraftNotification
 import { decideReminder, formatDigest, type ReminderCandidate, type ThrottleState } from './policy.js'
 import type { SendOutcome, WechatChannelAdapter } from './adapter.js'
 
+/**
+ * 多租户扫描作用域：每轮对每个作用域各跑一遍单库逻辑。
+ * run 负责在该库的上下文中执行 fn（index.ts 用 pool.runForUser 构造用户库作用域，
+ * db 句柄在其中自动路由到用户库）；缺省（不传 scopes）为单库=默认库。
+ */
+export interface SchedulerScope {
+  label: string
+  run: <T>(fn: () => Promise<T>) => Promise<T>
+}
+
 export interface SchedulerDeps {
   db: DatabaseSync
   adapter: WechatChannelAdapter
@@ -33,6 +43,8 @@ export interface SchedulerDeps {
   isTargetConfigured: () => boolean
   /** 观察 dsh-im 入站消息计数（恢复信号）；不可用则返回 null */
   readInboundCount?: () => Promise<number | null>
+  /** 多租户：每轮扫描的库作用域（默认库 + 各用户库）；缺省单库。 */
+  scopes?: () => readonly SchedulerScope[]
   now?: () => Date
   log?: (message: string) => void
 }
@@ -92,114 +104,176 @@ export class ReminderScheduler {
     }
   }
 
-  /** 扫描一次草稿通知（验收申请等）。与到期提醒同轮次执行，独立节流预算。 */
+  /** 扫描一次草稿通知（验收申请等）。与到期提醒同轮次执行，独立节流预算；多库逐作用域汇总。 */
   async scanDrafts(): Promise<DraftNotifyResult> {
     const empty: DraftNotifyResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, unavailable: 0 }
     if (this.disposed || this.scanningDrafts) return empty
-    const policy = this.policy()
-    if (!policy.enabled) return empty
     this.scanningDrafts = true
     try {
-      return await scanDraftNotifications(this.draftDeps(), policy)
+      const scopes = this.deps.scopes
+      if (scopes === undefined) return await this.scanDraftsScoped()
+      const total: DraftNotifyResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, unavailable: 0 }
+      for (const scope of scopes()) {
+        try {
+          const partial = await scope.run(() => this.scanDraftsScoped())
+          total.scanned += partial.scanned
+          total.sent += partial.sent
+          total.queued += partial.queued
+          total.skipped += partial.skipped
+          total.unavailable += partial.unavailable
+        } catch (error) {
+          this.log(`draft scan[${scope.label}] failed: ${String(error)}`)
+        }
+      }
+      return total
     } finally {
       this.scanningDrafts = false
     }
   }
 
-  /** 扫描一次。可重入保护：上一次未结束时直接跳过。 */
+  /** 单库草稿通知扫描（在「当前库上下文」下执行）。 */
+  private async scanDraftsScoped(): Promise<DraftNotifyResult> {
+    const empty: DraftNotifyResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, unavailable: 0 }
+    const policy = this.policy()
+    if (!policy.enabled) return empty
+    return await scanDraftNotifications(this.draftDeps(), policy)
+  }
+
+  /** 扫描一次。可重入保护：上一次未结束时直接跳过。多租户下逐作用域扫描并汇总。 */
   async scan(options: { catchup?: boolean } = {}): Promise<ScanResult> {
-    const result: ScanResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, skippedTooOld: 0, unavailable: 0 }
-    if (this.disposed || this.scanning) return result
+    const skipped: ScanResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, skippedTooOld: 0, unavailable: 0 }
+    if (this.disposed || this.scanning) return skipped
     this.scanning = true
     try {
-      const policy = this.policy()
-      if (!policy.enabled) return result
-      const now = this.now()
-      const nowMs = now.getTime()
-      // 不在这里按窗口过滤：窗口判定交给 decideReminder，这样"过期跳过"能记事件。
-      const due = listDueReminders(this.deps.db, now)
-      result.scanned = due.length
-      if (due.length === 0) return result
-
-      const state = this.throttleState(policy, now)
-      const channelReady = this.deps.adapter.available() && this.deps.isTargetConfigured()
-
-      // 未安装 / 未配置：不写 fired_at，让前端继续负责；只记一次事件（防刷）
-      if (!channelReady) {
-        for (const reminder of due) {
-          result.unavailable += 1
-          this.appendEventOnce(reminder.taskId, 'reminder_channel_unavailable', {
-            reminderId: reminder.reminderId,
-            reason: this.deps.adapter.available() ? 'not-configured' : 'not-installed',
-          }, now)
-        }
-        return result
-      }
-
-      // 补发模式：把窗口内到期的合并成一条，不逐条发；窗口外的只记跳过事件。
-      if (options.catchup === true) {
-        const windowMs = policy.catchupWindowHours * 60 * 60_000
-        const fresh = due.filter((reminder) => {
-          const fireMs = Date.parse(reminder.dueAt) - reminder.offsetMinutes * 60_000
-          return Number.isFinite(fireMs) && nowMs - fireMs <= windowMs
-        })
-        for (const reminder of due) {
-          if (fresh.includes(reminder)) continue
-          result.skipped += 1
-          result.skippedTooOld += 1
-          this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
-        }
-        if (fresh.length === 0) return result
-        const entries = fresh.map((reminder) => ({ reminder, candidate: this.toCandidate(reminder) }))
-        const body = formatDigest(entries.map((entry) => ({ title: entry.candidate.title, dueAt: entry.candidate.dueAt })), policy.catchupMaxItems)
-        const outcome = await this.deps.adapter.send({ title: '工作台 · 错过的工作台提醒', body, priorityCode: 'p1' })
-        for (const entry of entries) {
-          if (outcome.ok) {
-            fireReminder(this.deps.db, entry.reminder.reminderId, now.toISOString())
-            result.sent += 1
-            this.appendEventOnce(entry.reminder.taskId, 'reminder_fired', { reminderId: entry.reminder.reminderId, channel: 'wechat', mode: 'catchup' }, now)
-          } else {
-            this.enqueue(entry.reminder, entry.candidate, outcome, policy, now)
-            result.queued += 1
-          }
-        }
-        return result
-      }
-
-      for (const reminder of due) {
-        const candidate = this.toCandidate(reminder)
-        const decision = decideReminder(policy, candidate, state, nowMs)
-        if (decision.action === 'skip') {
-          result.skipped += 1
-          if (decision.reason === 'too-old') {
-            result.skippedTooOld += 1
-            this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
-          }
-          continue
-        }
-        if (decision.action === 'queue') {
-          this.enqueue(reminder, candidate, { ok: false, reason: decision.reason === 'breaker' ? 'throttled' : 'throttled', detail: decision.reason }, policy, now)
-          result.queued += 1
-          continue
-        }
-        const outcome = await this.deps.adapter.send({ title: `任务提醒：${candidate.title}`, body: `到期时间：${candidate.dueAt}`, priorityCode: candidate.priorityCode })
-        if (outcome.ok) {
-          fireReminder(this.deps.db, reminder.reminderId, now.toISOString())
-          result.sent += 1
-          this.appendEventOnce(reminder.taskId, 'reminder_fired', { reminderId: reminder.reminderId, channel: 'wechat', mode: decision.reason }, now)
-        } else {
-          this.enqueue(reminder, candidate, outcome, policy, now)
-          result.queued += 1
+      const scopes = this.deps.scopes
+      if (scopes === undefined) return await this.scanScoped(options)
+      const total: ScanResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, skippedTooOld: 0, unavailable: 0 }
+      for (const scope of scopes()) {
+        try {
+          const partial = await scope.run(() => this.scanScoped(options))
+          total.scanned += partial.scanned
+          total.sent += partial.sent
+          total.queued += partial.queued
+          total.skipped += partial.skipped
+          total.skippedTooOld += partial.skippedTooOld
+          total.unavailable += partial.unavailable
+        } catch (error) {
+          this.log(`scan[${scope.label}] failed: ${String(error)}`)
         }
       }
-      return result
+      return total
     } finally {
       this.scanning = false
     }
   }
 
-  /** 释放队列（合并成一条）。 */
+  /** 单库扫描（在「当前库上下文」下执行；多租户由 scan 逐作用域调用）。 */
+  private async scanScoped(options: { catchup?: boolean } = {}): Promise<ScanResult> {
+    const result: ScanResult = { scanned: 0, sent: 0, queued: 0, skipped: 0, skippedTooOld: 0, unavailable: 0 }
+    const policy = this.policy()
+    if (!policy.enabled) return result
+    const now = this.now()
+    const nowMs = now.getTime()
+    // 不在这里按窗口过滤：窗口判定交给 decideReminder，这样"过期跳过"能记事件。
+    const due = listDueReminders(this.deps.db, now)
+    result.scanned = due.length
+    if (due.length === 0) return result
+
+    const state = this.throttleState(policy, now)
+    const channelReady = this.deps.adapter.available() && this.deps.isTargetConfigured()
+
+    // 未安装 / 未配置：不写 fired_at，让前端继续负责；只记一次事件（防刷）
+    if (!channelReady) {
+      for (const reminder of due) {
+        result.unavailable += 1
+        this.appendEventOnce(reminder.taskId, 'reminder_channel_unavailable', {
+          reminderId: reminder.reminderId,
+          reason: this.deps.adapter.available() ? 'not-configured' : 'not-installed',
+        }, now)
+      }
+      return result
+    }
+
+    // 补发模式：把窗口内到期的合并成一条，不逐条发；窗口外的只记跳过事件。
+    if (options.catchup === true) {
+      const windowMs = policy.catchupWindowHours * 60 * 60_000
+      const fresh = due.filter((reminder) => {
+        const fireMs = Date.parse(reminder.dueAt) - reminder.offsetMinutes * 60_000
+        return Number.isFinite(fireMs) && nowMs - fireMs <= windowMs
+      })
+      for (const reminder of due) {
+        if (fresh.includes(reminder)) continue
+        result.skipped += 1
+        result.skippedTooOld += 1
+        this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
+      }
+      if (fresh.length === 0) return result
+      const entries = fresh.map((reminder) => ({ reminder, candidate: this.toCandidate(reminder) }))
+      const body = formatDigest(entries.map((entry) => ({ title: entry.candidate.title, dueAt: entry.candidate.dueAt })), policy.catchupMaxItems)
+      const outcome = await this.deps.adapter.send({ title: '工作台 · 错过的工作台提醒', body, priorityCode: 'p1' })
+      for (const entry of entries) {
+        if (outcome.ok) {
+          fireReminder(this.deps.db, entry.reminder.reminderId, now.toISOString())
+          result.sent += 1
+          this.appendEventOnce(entry.reminder.taskId, 'reminder_fired', { reminderId: entry.reminder.reminderId, channel: 'wechat', mode: 'catchup' }, now)
+        } else {
+          this.enqueue(entry.reminder, entry.candidate, outcome, policy, now)
+          result.queued += 1
+        }
+      }
+      return result
+    }
+
+    for (const reminder of due) {
+      const candidate = this.toCandidate(reminder)
+      const decision = decideReminder(policy, candidate, state, nowMs)
+      if (decision.action === 'skip') {
+        result.skipped += 1
+        if (decision.reason === 'too-old') {
+          result.skippedTooOld += 1
+          this.appendEventOnce(reminder.taskId, 'reminder_skipped', { reminderId: reminder.reminderId, reason: 'too-old' }, now)
+        }
+        continue
+      }
+      if (decision.action === 'queue') {
+        this.enqueue(reminder, candidate, { ok: false, reason: decision.reason === 'breaker' ? 'throttled' : 'throttled', detail: decision.reason }, policy, now)
+        result.queued += 1
+        continue
+      }
+      const outcome = await this.deps.adapter.send({ title: `任务提醒：${candidate.title}`, body: `到期时间：${candidate.dueAt}`, priorityCode: candidate.priorityCode })
+      if (outcome.ok) {
+        fireReminder(this.deps.db, reminder.reminderId, now.toISOString())
+        result.sent += 1
+        this.appendEventOnce(reminder.taskId, 'reminder_fired', { reminderId: reminder.reminderId, channel: 'wechat', mode: decision.reason }, now)
+      } else {
+        this.enqueue(reminder, candidate, outcome, policy, now)
+        result.queued += 1
+      }
+    }
+    return result
+  }
+
+  /** 释放队列（合并成一条）。多租户下逐作用域释放并汇总。 */
   async flushQueue(): Promise<{ sent: number; merged: number; failed: number; reason?: string }> {
+    const scopes = this.deps.scopes
+    if (scopes === undefined) return await this.flushQueueScoped()
+    const total: { sent: number; merged: number; failed: number; reason?: string } = { sent: 0, merged: 0, failed: 0 }
+    for (const scope of scopes()) {
+      try {
+        const partial = await scope.run(() => this.flushQueueScoped())
+        total.sent += partial.sent
+        total.merged += partial.merged
+        total.failed += partial.failed
+        if (total.reason === undefined && partial.reason !== undefined) total.reason = partial.reason
+      } catch (error) {
+        this.log(`flush[${scope.label}] failed: ${String(error)}`)
+      }
+    }
+    return total
+  }
+
+  /** 单库队列释放（在「当前库上下文」下执行）。 */
+  private async flushQueueScoped(): Promise<{ sent: number; merged: number; failed: number; reason?: string }> {
     if (this.disposed) return { sent: 0, merged: 0, failed: 0 }
     const policy = this.policy()
     if (!policy.enabled) return { sent: 0, merged: 0, failed: 0 }

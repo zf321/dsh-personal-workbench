@@ -14,7 +14,8 @@ import {
 } from '../db/repo.js'
 import { makeAiSessionRoutes } from './routes/ai-sessions.js'
 import { makeDraftRoutes } from './routes/drafts.js'
-import { isLoopbackRequest, readJsonBody, todayRange, writeJson } from './routes/helpers.js'
+import { isInside } from '../tenant/workspace-map.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, fileBoundaryOf, readJsonBody, todayRange, writeJson } from './routes/helpers.js'
 import { makeIdeaClusterRoutes } from './routes/idea-clusters.js'
 import { makeIdeaRoutes } from './routes/ideas.js'
 import { makeKnowledgeRoutes } from './routes/knowledge.js'
@@ -43,11 +44,16 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
       kind: 'exact',
       path: '/api/workbench/workspaces/ensure',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         if ((req.method ?? 'GET') !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
         const body = await readJsonBody(req)
         const path = typeof body?.path === 'string' && body.path.trim() !== '' ? body.path.trim() : undefined
         if (path === undefined) return writeJson(res, 400, { error: 'path is required' })
+        const boundary = fileBoundaryOf(auth)
+        if (boundary.mode === 'denied') return writeJson(res, 403, { error: 'no workspace for this account' })
+        if (boundary.mode === 'workspace' && !isInside(boundary.root, path)) return writeJson(res, 403, { error: 'path is outside your workspace' })
         try {
           mkdirSync(path, { recursive: true })
           return writeJson(res, 200, { ok: true, path })
@@ -61,13 +67,20 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
       kind: 'exact',
       path: '/api/workbench/settings',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const method = req.method ?? 'GET'
+        const boundary = fileBoundaryOf(auth)
+        // 多租户：项目用户未显式设置默认工作区时回退到其工作区（前端据此派生子目录）；
+        // 回环/管理员保持空值（由前端回退到当前工作区列表）。
+        const defaultWorkspaceOf = (stored: string): string =>
+          stored !== '' ? stored : boundary.mode === 'workspace' ? boundary.root : ''
         if (method === 'GET') {
           return writeJson(res, 200, {
             ok: true,
             settings: {
-              defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
+              defaultWorkspace: defaultWorkspaceOf(readMeta(db, 'ai_default_workspace') ?? ''),
               autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
               desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
             },
@@ -76,11 +89,18 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
         if (method === 'POST') {
           const body = await readJsonBody(req)
           if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
-          if (typeof body.defaultWorkspace === 'string') writeMeta(db, 'ai_default_workspace', body.defaultWorkspace)
+          if (typeof body.defaultWorkspace === 'string') {
+            const value = body.defaultWorkspace.trim()
+            if (value !== '') {
+              if (boundary.mode === 'denied') return writeJson(res, 403, { error: 'no workspace for this account' })
+              if (boundary.mode === 'workspace' && !isInside(boundary.root, value)) return writeJson(res, 403, { error: 'defaultWorkspace is outside your workspace' })
+            }
+            writeMeta(db, 'ai_default_workspace', value)
+          }
           if (body.autoCreateTypeFolders === true || body.autoCreateTypeFolders === false) writeMeta(db, 'auto_create_type_folders', body.autoCreateTypeFolders ? '1' : '0')
           if (body.desktopNotify === true || body.desktopNotify === false) writeMeta(db, 'desktop_notify', body.desktopNotify ? '1' : '0')
           return writeJson(res, 200, { ok: true, settings: {
-            defaultWorkspace: readMeta(db, 'ai_default_workspace') ?? '',
+            defaultWorkspace: defaultWorkspaceOf(readMeta(db, 'ai_default_workspace') ?? ''),
             autoCreateTypeFolders: (readMeta(db, 'auto_create_type_folders') ?? '1') === '1',
             desktopNotify: (readMeta(db, 'desktop_notify') ?? '1') === '1',
           } })
@@ -92,8 +112,10 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
     {
       kind: 'exact',
       path: '/api/workbench/bootstrap',
-      handler(req, res) {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+      async handler(req, res) {
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const now = new Date()
         const { start, end } = todayRange(now)
         ensureRecurringInstances(db, localDateString(now))
@@ -129,7 +151,9 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
       kind: 'exact',
       path: '/api/workbench/maintenance/repair-parents',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         if ((req.method ?? 'GET') !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
         try {
           const changed = repairParentCompletion(db)
@@ -150,8 +174,10 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
     {
       kind: 'exact',
       path: '/api/workbench/health',
-      handler(_req, res) {
-        if (!isLoopbackRequest(_req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+      async handler(_req, res) {
+        const auth = await authenticateWorkbenchRequest(_req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined
         writeJson(res, 200, {
           ok: true,

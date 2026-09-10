@@ -5,7 +5,7 @@
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { listQueue, writeMeta } from '../../db/repo.js'
-import { isLoopbackRequest, pathSegments, readJsonBody, writeJson } from './helpers.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, pathSegments, readJsonBody, writeJson } from './helpers.js'
 
 export interface ReminderRouteDeps {
   /** 通道状态与目标选择（由入口注入；缺省时提醒相关接口返回未安装） */
@@ -30,7 +30,9 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
       kind: 'exact',
       path: '/api/workbench/reminders/policy',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         if (deps.policy === undefined) return writeJson(res, 503, { error: 'reminder policy unavailable' })
         const method = req.method ?? 'GET'
         if (method === 'GET') return writeJson(res, 200, { ok: true, policy: deps.policy.read() })
@@ -46,7 +48,9 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
       kind: 'exact',
       path: '/api/workbench/reminders/channel',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         if (deps.channel === undefined) return writeJson(res, 503, { error: 'reminder channel unavailable' })
         const method = req.method ?? 'GET'
         if (method === 'GET') {
@@ -69,7 +73,9 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
       kind: 'exact',
       path: '/api/workbench/reminders/test',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         if (req.method !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
         if (deps.test === undefined) return writeJson(res, 503, { error: 'reminder channel unavailable' })
         const result = await deps.test()
@@ -80,7 +86,9 @@ export function makeReminderRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {
       kind: 'prefix',
       path: '/api/workbench/reminders',
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, '/api/workbench/reminders')
         const method = req.method ?? 'GET'

@@ -9,20 +9,8 @@ import { homedir } from 'node:os'
 import { dirname, join as pathJoin } from 'node:path'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { assertValidFileLink } from '../db/repo.js'
-
-function isLoopbackRequest(req: IncomingMessage): boolean {
-  const address = req.socket.remoteAddress
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  const host = req.headers.host
-  if (typeof host !== 'string') return false
-  let url: URL
-  try { url = new URL(`http://${host}`) } catch { return false }
-  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost' && url.hostname !== '[::1]') return false
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers.origin
-  if (origin === undefined) return true
-  try { return new URL(origin).host === url.host } catch { return false }
-}
+import { isInside } from '../tenant/workspace-map.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, fileBoundaryOf } from './routes/helpers.js'
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'referrer-policy': 'no-referrer' })
@@ -70,13 +58,19 @@ function toNativePath(link: string): string {
   return path
 }
 
-async function listLocalDirectory(rawPath?: string): Promise<{
+/**
+ * 浏览目录。boundaryRoot —— 多租户普通用户的工作区边界：起始目录、父级上限、
+ * 越界拒绝都在边界内；未传（回环/管理员）保持原有「任意位置 + homedir 起始」行为。
+ */
+async function listLocalDirectory(rawPath: string | undefined, boundaryRoot: string | undefined): Promise<{
   path: string
   parent: string | null
   home: string
   entries: Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; hidden: boolean }>
 }> {
-  const dir = rawPath === undefined || rawPath.trim() === '' ? homedir() : toNativePath(assertValidFileLink(rawPath)!)
+  const home = boundaryRoot ?? homedir()
+  const dir = rawPath === undefined || rawPath.trim() === '' ? home : toNativePath(assertValidFileLink(rawPath)!)
+  if (boundaryRoot !== undefined && !isInside(boundaryRoot, dir)) throw new Error('path is outside your workspace')
   const info = await stat(dir)
   if (!info.isDirectory()) throw new Error('path is not a directory')
   const dirents = await readdir(dir, { withFileTypes: true })
@@ -91,8 +85,9 @@ async function listLocalDirectory(rawPath?: string): Promise<{
     }))
     .sort((a, b) => (a.isDirectory === b.isDirectory ? a.name.localeCompare(b.name) : a.isDirectory ? -1 : 1))
     .slice(0, 500)
-  const parent = dirname(dir) === dir ? null : dirname(dir)
-  return { path: dir, parent, home: homedir(), entries }
+  const parentRaw = dirname(dir) === dir ? null : dirname(dir)
+  const parent = parentRaw !== null && boundaryRoot !== undefined && !isInside(boundaryRoot, parentRaw) ? null : parentRaw
+  return { path: dir, parent, home, entries }
 }
 
 export function makeLocalDirRoute(): WebRoute {
@@ -100,7 +95,11 @@ export function makeLocalDirRoute(): WebRoute {
     kind: 'exact',
     path: '/api/workbench/knowledge/list-local-dir',
     handler: async (req, res) => {
-      if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+      const auth = await authenticateWorkbenchRequest(req)
+      if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+      enterWorkbenchAuthContext(auth)
+      const boundary = fileBoundaryOf(auth)
+      if (boundary.mode === 'denied') return writeJson(res, 403, { error: 'no workspace for this account' })
       const url = new URL(req.url ?? '/', 'http://localhost')
       const method = req.method ?? 'GET'
       const body = method === 'POST' ? await readJsonBody(req) : undefined
@@ -108,7 +107,7 @@ export function makeLocalDirRoute(): WebRoute {
         ? url.searchParams.get('path') ?? undefined
         : method === 'POST' && body !== undefined && typeof body.path === 'string' ? body.path : undefined
       try {
-        const listing = await listLocalDirectory(rawPath)
+        const listing = await listLocalDirectory(rawPath, boundary.mode === 'workspace' ? boundary.root : undefined)
         return writeJson(res, 200, { ok: true, ...listing })
       } catch (error) {
         return writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })

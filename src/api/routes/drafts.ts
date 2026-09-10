@@ -5,7 +5,7 @@
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { DatabaseSync } from 'node:sqlite'
 import { abandonDraft, addTaskMemory, appendEvent, completeTaskCascade, confirmDailyPlanDraft, confirmIdeaClusterDraft, confirmIdeaTaskDraft, confirmKnowledgeDraft, confirmReportDraft, confirmSubtaskPlanDraft, confirmTaskDraft, createDraft, createTaskReview, deferDraft, getDictionary, getDraft, getDraftBySession, getLatestActiveDraft, getTask, isDeferrableDraftKind, linkTaskSession, listDeferredDrafts, resumeDraft, updateTaskWithCompletion } from '../../db/repo.js'
-import { DRAFTS_PREFIX, isLoopbackRequest, pathSegments, publicTask, readJsonBody, writeJson } from './helpers.js'
+import { DRAFTS_PREFIX, authenticateWorkbenchRequest, enterWorkbenchAuthContext, pathSegments, publicTask, readJsonBody, writeJson } from './helpers.js'
 
 /** 草稿 → 任务的事件与记忆：确认/驳回/暂存三类动作都要留痕（AI 后续会话据此知道发生了什么）。 */
 function taskIdOf(draft: { payload: Record<string, unknown> }): string | undefined {
@@ -40,7 +40,9 @@ export function makeDraftRoutes(db: DatabaseSync): WebRoute[] {
       kind: 'prefix',
       path: DRAFTS_PREFIX,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, DRAFTS_PREFIX)
         const method = req.method ?? 'GET'

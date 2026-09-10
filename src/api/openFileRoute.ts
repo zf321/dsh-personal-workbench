@@ -8,20 +8,8 @@ import { stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { assertValidFileLink } from '../db/repo.js'
-
-function isLoopbackRequest(req: IncomingMessage): boolean {
-  const address = req.socket.remoteAddress
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  const host = req.headers.host
-  if (typeof host !== 'string') return false
-  let url: URL
-  try { url = new URL(`http://${host}`) } catch { return false }
-  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost' && url.hostname !== '[::1]') return false
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = req.headers.origin
-  if (origin === undefined) return true
-  try { return new URL(origin).host === url.host } catch { return false }
-}
+import { isInside } from '../tenant/workspace-map.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, fileBoundaryOf } from './routes/helpers.js'
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'referrer-policy': 'no-referrer' })
@@ -119,7 +107,11 @@ export function makeOpenFileRoute(): WebRoute {
     kind: 'exact',
     path: '/api/workbench/knowledge/open-file',
     handler: async (req, res) => {
-      if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+      const auth = await authenticateWorkbenchRequest(req)
+      if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+      enterWorkbenchAuthContext(auth)
+      const boundary = fileBoundaryOf(auth)
+      if (boundary.mode === 'denied') return writeJson(res, 403, { error: 'no workspace for this account' })
       if ((req.method ?? 'GET') !== 'POST') return writeJson(res, 405, { error: 'method not allowed' })
       const body = await readJsonBody(req)
       if (body === undefined) return writeJson(res, 400, { error: 'invalid JSON body' })
@@ -129,6 +121,7 @@ export function makeOpenFileRoute(): WebRoute {
         const fileLink = assertValidFileLink(raw)
         if (fileLink === null) return writeJson(res, 400, { error: 'fileLink is required' })
         const filePath = toNativePath(fileLink)
+        if (boundary.mode === 'workspace' && !isInside(boundary.root, filePath)) return writeJson(res, 403, { error: 'path is outside your workspace' })
         const info = await stat(filePath)
         if (!info.isFile()) return writeJson(res, 400, { error: 'path is not a file' })
         await openLocalFile(filePath)

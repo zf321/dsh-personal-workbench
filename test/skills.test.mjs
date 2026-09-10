@@ -78,10 +78,10 @@ async function callRoute(route, exchange) {
   return exchange.captured
 }
 
-test('skills 路由：非回环请求拒绝', async () => {
+test('skills 路由：非回环请求无 token 拒绝', async () => {
   const [route] = makeSkillRoutes({ probe: () => ({ list: async () => [] }) })
   const captured = await callRoute(route, fakeExchange({ remoteAddress: '10.0.0.5' }))
-  assert.equal(captured.status, 403)
+  assert.equal(captured.status, 401)
 })
 
 test('skills 路由：宿主未注册服务时 available=false 且列表为空', async () => {

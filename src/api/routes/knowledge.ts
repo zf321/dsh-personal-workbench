@@ -7,7 +7,8 @@ import type { DatabaseSync } from 'node:sqlite'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { assertValidFileLink, createKnowledge, deleteKnowledge, getDictionary, getKnowledge, listKnowledge, updateKnowledge } from '../../db/repo.js'
-import { isLoopbackRequest, KNOWLEDGE_PREFIX, MAX_LOCAL_DOC_BYTES, pathSegments, readJsonBody, requireCode, toNativePath, writeJson } from './helpers.js'
+import { isInside } from '../../tenant/workspace-map.js'
+import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, fileBoundaryOf, KNOWLEDGE_PREFIX, MAX_LOCAL_DOC_BYTES, pathSegments, readJsonBody, requireCode, toNativePath, writeJson } from './helpers.js'
 
 export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
   return [
@@ -15,7 +16,9 @@ export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
       kind: 'prefix',
       path: KNOWLEDGE_PREFIX,
       handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) return writeJson(res, 403, { error: 'forbidden: loopback-only' })
+        const auth = await authenticateWorkbenchRequest(req)
+        if (auth === undefined) return writeJson(res, 401, { error: 'unauthorized: login required' })
+        enterWorkbenchAuthContext(auth)
         const url = new URL(req.url ?? '/', 'http://localhost')
         const segments = pathSegments(url, KNOWLEDGE_PREFIX)
         const method = req.method ?? 'GET'
@@ -25,10 +28,13 @@ export function makeKnowledgeRoutes(db: DatabaseSync): WebRoute[] {
             ? url.searchParams.get('path') ?? undefined
             : method === 'POST' && body !== undefined && typeof body.path === 'string' ? body.path : undefined
           if (rawPath === undefined || rawPath.trim() === '') return writeJson(res, 400, { error: 'path is required' })
+          const boundary = fileBoundaryOf(auth)
+          if (boundary.mode === 'denied') return writeJson(res, 403, { error: 'no workspace for this account' })
           try {
             const fileLink = assertValidFileLink(rawPath)
             if (fileLink === null) return writeJson(res, 400, { error: 'path is required' })
             const filePath = toNativePath(fileLink)
+            if (boundary.mode === 'workspace' && !isInside(boundary.root, filePath)) return writeJson(res, 403, { error: 'path is outside your workspace' })
             const info = await stat(filePath)
             if (!info.isFile()) return writeJson(res, 400, { error: 'path is not a file' })
             const content = await readFile(filePath, 'utf8')

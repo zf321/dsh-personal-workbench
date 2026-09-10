@@ -449,7 +449,9 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         } catch { /* 目录创建/注册失败则回退当前工作区 */ }
       }
       if (workspaceId === undefined) throw new Error('没有可用工作区，请先在 DSH 中打开一个工作区')
-      const id = await runtime.uiWorkspace.connectWorkspace(workspaceId)
+      const connectWorkspace = resolveWorkspaceConnector(runtime)
+      if (connectWorkspace === undefined) throw new Error('当前 DSH 宿主缺少工作区连接能力，请升级 DSH 或反馈插件作者')
+      const id = await connectWorkspace(workspaceId)
       const binding = runtime.sessions.binding(id)
       if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
       await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
@@ -1997,8 +1999,22 @@ function conversationColumn(): HTMLElement | undefined {
   return document.querySelector<HTMLElement>('[data-pane="conversation"], [class*="centerCol"]') ?? undefined
 }
 
+/**
+ * 兼容新旧宿主的工作区导航：较新宿主由独立 uiWorkspace 服务提供 connectWorkspace，
+ * 旧宿主（如 0.1.1-rc.2）该能力仍在 workspaces 服务上。两者都缺失时返回 undefined。
+ */
+function resolveWorkspaceConnector(runtime: WorkbenchRuntime): ((workspaceId: string) => Promise<string>) | undefined {
+  // uiWorkspace 未声明注入（旧宿主缺失该服务会导致插件 pending、界面 boot 失败），
+  // 必须经 Context 软读取；直接属性访问在服务缺失时会抛错。
+  const uiWorkspace = runtime.get?.('uiWorkspace') as { connectWorkspace(workspaceId: string): Promise<string> } | undefined
+  if (uiWorkspace !== undefined) return (workspaceId) => uiWorkspace.connectWorkspace(workspaceId)
+  const workspaces = runtime.workspaces
+  const connectWorkspace = workspaces.connectWorkspace
+  return connectWorkspace === undefined ? undefined : (workspaceId) => connectWorkspace.call(workspaces, workspaceId)
+}
+
 export const name = 'personal-workbench-client'
-export const inject = ['sessions', 'workspaces', 'connection', 'uiWorkspace']
+export const inject = ['sessions', 'workspaces', 'connection']
 
 export function apply(ctx: unknown): () => void {
   const runtime = ctx as WorkbenchRuntime
