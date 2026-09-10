@@ -452,8 +452,14 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
       const connectWorkspace = resolveWorkspaceConnector(runtime)
       if (connectWorkspace === undefined) throw new Error('当前 DSH 宿主缺少工作区连接能力，请升级 DSH 或反馈插件作者')
       const id = await connectWorkspace(workspaceId)
-      const binding = runtime.sessions.binding(id)
-      if (binding === undefined) throw new Error('会话绑定未就绪，请稍后重试')
+      // 页面与服务端的会话列表偶发不同步（例如页面连接刚中断/恢复）；短暂等待绑定就绪，
+      // 避免误报后用户重复点击、留下多个空会话。
+      let binding = runtime.sessions.binding(id)
+      for (let waited = 0; binding === undefined && waited < 12000; waited += 300) {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        binding = runtime.sessions.binding(id)
+      }
+      if (binding === undefined) throw new Error('会话已创建，但页面尚未同步（连接可能刚中断过）。请刷新页面后重试')
       await binding.session.rename(mode === 'idea_association' ? '点子关联' : mode === 'idea_brainstorm' ? '点子头脑风暴' : mode === 'knowledge_doc' ? `知识总结：${docContext?.name ?? '本地文档'}` : mode === 'report' ? `${text.startsWith('week:') ? '周报' : '日报'}：${text.split(':')[1] ?? ''}` : mode === 'plan' ? `AI 计划：${planAnchor.slice(5)}` : mode === 'clarify' ? `澄清：${text.slice(0, 24)}` : mode === 'consult' ? `协助：${task?.title.slice(0, 24)}` : mode === 'breakdown' ? `拆解：${task?.title.slice(0, 24)}` : mode === 'review' ? `复盘：${task?.title.slice(0, 24)}` : `执行：${task?.title.slice(0, 24)}`).catch(() => undefined)
       let reportContextText = ''
       if (mode === 'report') {
