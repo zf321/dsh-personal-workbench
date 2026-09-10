@@ -417,6 +417,8 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         }
       }
       const ws = runtime.workspaces.list.getSnapshot()
+      // 多租户：工作区列表为全实例共享，items[0] 可能是其他用户的工作区；
+      // 仅作最后兜底，主路径由下面按"用户默认工作区"解析出的 workspaceId 覆盖。
       let workspaceId = ws.items[0]?.workspaceId
       const hostHome = hostHomeOf(runtime)
       const isWsl = hostHome !== undefined
@@ -428,11 +430,18 @@ function WorkbenchApp({ runtime, closePanel }: { runtime: WorkbenchRuntime; clos
         // 有效工作区 = 自身 workspacePath，未设置时继承最近祖先的设置（与 effectiveDueAt 同构）。
         // 继承到值就直接用，不再按任务标题建子文件夹——否则子任务会各自散到新目录里。
         desired = task.effectiveWorkspacePath ?? ''
-        if (desired === '' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-          desired = joinPath(settings.defaultWorkspace, folderForText(task.title), pathSep)
+        if (desired === '' && settings.defaultWorkspace !== '') {
+          // 没有任务工作区时落到用户默认工作区；开启"自动类型文件夹"再建类型子目录。
+          desired = settings.autoCreateTypeFolders
+            ? joinPath(settings.defaultWorkspace, folderForText(task.title), pathSep)
+            : settings.defaultWorkspace
         }
-      } else if (mode === 'clarify' && settings.defaultWorkspace !== '' && settings.autoCreateTypeFolders) {
-        desired = joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'), pathSep)
+      } else if (settings.defaultWorkspace !== '') {
+        // 多租户：工作区列表为全实例共享，ws.items[0] 可能是其他用户的工作区。
+        // 无任务场景（总结/计划/报告/点子等）一律使用当前用户自己的默认工作区。
+        desired = mode === 'clarify' && settings.autoCreateTypeFolders
+          ? joinPath(settings.defaultWorkspace, folderForText(text || '需求澄清'), pathSep)
+          : settings.defaultWorkspace
       }
       // WSL 下把 Windows 盘符路径（D:\Code）统一归一化为真实路径（/mnt/d/Code）。
       // 相对路径和已是 /mnt/... 的路径不会被转换；原生 Windows 上不做转换。
