@@ -43,6 +43,17 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
+/**
+ * 兼容模型把 json 类型参数传成「JSON 字符串」的形态（实测对象会被序列化成
+ * 字符串传入）：字符串先尝试 JSON.parse；空串或解析失败返回 undefined，其余原样返回。
+ */
+function jsonArg(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  try { return JSON.parse(trimmed) as unknown } catch { return undefined }
+}
+
 export function submitTaskTool(db: DatabaseSync) {
   return defineTool({
     name: 'workbench_submit_task',
@@ -106,8 +117,8 @@ export function submitTaskTool(db: DatabaseSync) {
         reminderOffsetMinutes: reminderOffset ?? null,
         parentId: str(args.parent_id) ?? null,
         workspacePath,
-        subtasks: args.subtasks ?? [],
-        extra: args.extra ?? {},
+        subtasks: jsonArg(args.subtasks) ?? [],
+        extra: jsonArg(args.extra) ?? {},
         source: 'nl',
       }
 
@@ -149,7 +160,8 @@ export function proposeDailyPlanTool(db: DatabaseSync) {
       if (!PLAN_DATE_RE.test(planDate)) return '错误：plan_date 必须是 YYYY-MM-DD 格式'
       const summary = str(args.summary)
       if (summary === undefined) return '错误：summary 必填'
-      const rawItems = Array.isArray(args.items) ? args.items as unknown[] : []
+      const itemsArg = jsonArg(args.items)
+      const rawItems = Array.isArray(itemsArg) ? itemsArg as unknown[] : []
       if (rawItems.length === 0) return '错误：items 不能为空（若今天没有需要处理的任务，请直接告知用户）'
 
       const seen = new Set<string>()
@@ -219,7 +231,8 @@ export function proposeIdeaClustersTool(db: DatabaseSync) {
       render: (_args, value: string) => text(value),
     },
     async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
-      const raw = Array.isArray(args.clusters) ? args.clusters as unknown[] : []
+      const clustersArg = jsonArg(args.clusters)
+      const raw = Array.isArray(clustersArg) ? clustersArg as unknown[] : []
       if (raw.length === 0) return '错误：clusters 不能为空'
       const seenIdea = new Set<string>()
       const clusters: Array<{ title: string; summary: string; idea_ids: string[]; idea_titles: string[]; notes?: Record<string, string> }> = []
@@ -268,9 +281,11 @@ export function submitIdeaTasksTool(db: DatabaseSync) {
       render: (_args, value: string) => text(value),
     },
     async execute(args: Record<string, unknown>, exec: { agent?: { session?: { id?: string } } }) {
-      const raw = Array.isArray(args.tasks) ? args.tasks as unknown[] : []
+      const tasksArg = jsonArg(args.tasks)
+      const raw = Array.isArray(tasksArg) ? tasksArg as unknown[] : []
       if (raw.length === 0) return '错误：tasks 不能为空'
-      const sourceIdeaIds = Array.isArray(args.source_idea_ids) ? args.source_idea_ids.filter((id): id is string => typeof id === 'string') : []
+      const sourceIdeaIdsArg = jsonArg(args.source_idea_ids)
+      const sourceIdeaIds = Array.isArray(sourceIdeaIdsArg) ? sourceIdeaIdsArg.filter((id): id is string => typeof id === 'string') : []
       const sourceClusterId = str(args.source_cluster_id)
       if (sourceIdeaIds.length === 0 && sourceClusterId === undefined) return '错误：source_idea_ids 与 source_cluster_id 至少传一个'
       for (const id of sourceIdeaIds) if (getIdea(db, id) === undefined) return `错误：点子 ${id} 不存在`
@@ -332,7 +347,8 @@ export function submitKnowledgeTool(db: DatabaseSync) {
       if (typeof args.source_task_id === 'string' && args.source_task_id !== '' && getTask(db, args.source_task_id) === undefined) {
         return `错误：source_task_id 任务不存在：${args.source_task_id}`
       }
-      const tags = Array.isArray(args.tags) ? args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
+      const tagsArg = jsonArg(args.tags)
+      const tags = Array.isArray(tagsArg) ? tagsArg.filter((tag): tag is string => typeof tag === 'string').slice(0, 20) : []
       let fileLink: string | null = null
       if (args.file_link !== undefined && args.file_link !== null && args.file_link !== '') {
         try {
@@ -400,12 +416,13 @@ export function submitReportTool(db: DatabaseSync) {
       if (draftId !== undefined && existing === undefined) return `错误：草稿 ${draftId} 不存在`
       if (existing !== undefined && existing.statusCode !== 'pending') return `错误：草稿 ${draftId ?? existing.id} 状态为 ${existing.statusCode}，不能更新`
 
+      const statsArg = jsonArg(args.stats)
       const payload = {
         periodCode,
         periodStart,
         title,
         summaryMd,
-        stats: typeof args.stats === 'object' && args.stats !== null ? args.stats : {},
+        stats: typeof statsArg === 'object' && statsArg !== null ? statsArg : {},
         sessionId,
       }
       const draft = existing !== undefined
@@ -468,7 +485,7 @@ export function proposeSubtasksTool(db: DatabaseSync) {
 
       const payload: Record<string, unknown> = args.no_breakdown_needed === true
         ? { parentTaskId, subtasks: [], noBreakdownNeeded: true, rationale: str(args.rationale) ?? '' }
-        : { parentTaskId, subtasks: normalize(args.subtasks), rationale: str(args.rationale) ?? '' }
+        : { parentTaskId, subtasks: normalize(jsonArg(args.subtasks)), rationale: str(args.rationale) ?? '' }
 
       const draft = draftId !== undefined && existing !== undefined
         ? updateDraft(db, draftId, payload)
@@ -552,7 +569,7 @@ export function submitReviewTool(db: DatabaseSync) {
       const sessionId = exec?.agent?.session?.id ?? null
       // 幂等：同一任务已有待确认复盘草稿时更新，不重复新建。
       const existing = getPendingDraftForTask(db, 'review', taskId)
-      const payload = { taskId, summaryMd, lessons: args.lessons ?? [], sessionId }
+      const payload = { taskId, summaryMd, lessons: jsonArg(args.lessons) ?? [], sessionId }
       const draft = existing !== undefined
         ? updateDraft(db, existing.id, payload)
         : createDraft(db, { kindCode: 'review', sessionId, payload })
@@ -712,7 +729,7 @@ export function mcpCallTool(db: DatabaseSync) {
     parameters: {
       server: { type: 'string', required: true, description: 'MCP 服务名（或 id）' },
       tool: { type: 'string', required: true, description: '要调用的工具名' },
-      arguments: { type: 'json', description: '工具参数对象（按该工具的 inputSchema）；无参数可省略' },
+      arguments: { type: 'json', description: '工具参数对象（JSON 对象，键值按该工具的 inputSchema）；无参数可省略' },
     },
     output: {
       schema: { type: 'string' },
@@ -731,7 +748,11 @@ export function mcpCallTool(db: DatabaseSync) {
           : `错误：没有名为「${serverArg}」的 MCP 服务。已配置：${names.join('、')}`
       }
       if (row.enabled === 0) return `错误：MCP 服务「${row.name}」已停用，请在 工作台 → 设置 → MCP 服务 中启用后再调用。`
-      const rawArgs = args.arguments
+      const rawArgs = jsonArg(args.arguments)
+      const rawArgsText = typeof args.arguments === 'string' ? args.arguments.trim() : ''
+      if (rawArgsText !== '' && rawArgs === undefined) {
+        return '错误：arguments 不是合法的 JSON，请传 JSON 对象（无参数时省略该字段）。'
+      }
       const callArgs = typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs)
         ? rawArgs as Record<string, unknown>
         : {}

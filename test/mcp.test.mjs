@@ -376,6 +376,16 @@ test('mcp tools: list/call 实时读取用户配置', async () => {
       assert.match(ok, /北京/)
       assert.ok(state.calls.some((entry) => entry.tool === 'echo'))
 
+      // 模型把 arguments 序列化成 JSON 字符串时仍能正确解析（回归：参数不得被丢弃）
+      const stringArgs = await call.execute({ server: '地图服务', tool: 'echo', arguments: '{"city":"上海","limit":2}' })
+      assert.match(stringArgs, /结果/)
+      assert.match(stringArgs, /上海/)
+      assert.deepEqual(state.calls.at(-1).args, { city: '上海', limit: 2 })
+
+      // 非法 JSON 字符串给出明确错误，不静默丢参
+      const badString = await call.execute({ server: '地图服务', tool: 'echo', arguments: 'not-json' })
+      assert.match(badString, /不是合法的 JSON/)
+
       // 服务端 isError
       const boom = await call.execute({ server: '地图服务', tool: 'boom' })
       assert.match(boom, /返回错误/)

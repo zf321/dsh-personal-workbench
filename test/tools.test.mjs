@@ -141,6 +141,44 @@ test('agent tools write pending drafts and update tasks', async () => {
   }
 })
 
+test('json 参数以 JSON 字符串形态传入时正常解析（模型序列化兼容）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-personal-workbench-jsonarg-'))
+  try {
+    const db = openWorkbenchDb({ dbPath: join(dir, 'workbench.db') })
+    seedDictionaries(db)
+
+    // submit_task 的 subtasks / extra 传 JSON 字符串 → 写入草稿 payload 应为数组 / 对象
+    const submit = submitTaskTool(db)
+    await submit.execute(
+      { title: '字符串参数任务', type_code: 'code_impl', priority_code: 'p1', subtasks: '[{"title":"子任务1"}]', extra: '{"source":"nl"}' },
+      { agent: { session: { id: 'sess-str-1' } } },
+    )
+    const draft = getDraftBySession(db, 'sess-str-1')
+    assert.ok(Array.isArray(draft.payload.subtasks))
+    assert.equal(draft.payload.subtasks[0].title, '子任务1')
+    assert.equal(draft.payload.extra.source, 'nl')
+
+    // propose_daily_plan 的 items 传 JSON 字符串 → 正常生成提案
+    const t = createTaskForTest(db)
+    const plan = proposeDailyPlanTool(db)
+    const out = await plan.execute(
+      { summary: '字符串形态', items: JSON.stringify([{ task_id: t.id, order: 1, note: '上午' }]) },
+      { agent: { session: { id: 'sess-str-2' } } },
+    )
+    assert.match(out, /今日计划提案已保存/)
+
+    // 非法 JSON 字符串按空数组处理：明确报错，不静默写入数据
+    const bad = await plan.execute(
+      { summary: '坏 JSON', items: 'not-json' },
+      { agent: { session: { id: 'sess-str-3' } } },
+    )
+    assert.match(bad, /items 不能为空/)
+    db.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 function createTaskForTest(db) {
   return createTask(db, { title: 'execution target', typeCode: 'code_impl', priorityCode: 'p1', aiPolicyCode: 'execute' })
 }
