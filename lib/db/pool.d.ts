@@ -1,7 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { type WorkbenchDbConfig } from './database.js';
-/** slug 是否可安全用作目录名（与 dsh-multi-tenant-projects 的 slug 格式一致）。 */
+/** slug 是否可安全用作目录名（每段形状安全; `/` 经 userSlugDirName 转义）。 */
 export declare function isSafeUserSlug(slug: string): boolean;
+/** 用户库目录名：`/` 以 `__` 转义（段内不允许下划线, 映射无歧义）。 */
+export declare function userSlugDirName(slug: string): string;
 export declare class WorkbenchDbPool {
     private readonly store;
     private readonly userDbs;
@@ -19,7 +21,7 @@ export declare class WorkbenchDbPool {
     enterForUser(slug: string): void;
     /** 在指定用户的库上下文中同步执行（测试与批处理用）。 */
     runForUser<T>(slug: string, fn: () => T): T;
-    /** 用户库文件路径（诊断 / 测试可见）。 */
+    /** 用户库文件路径（诊断 / 测试可见; 目录名经 userSlugDirName 转义）。 */
     userDbPath(slug: string): string;
     /** 已打开的用户库快照（提醒调度等按用户轮询的场景使用）。 */
     openedUserDbs(): ReadonlyMap<string, DatabaseSync>;

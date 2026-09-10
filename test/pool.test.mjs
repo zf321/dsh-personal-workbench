@@ -11,9 +11,16 @@ const INPUT = { title: '池隔离测试', typeCode: 'client_meeting', priorityCo
 test('pool: slug 安全校验', () => {
   assert.equal(isSafeUserSlug('testu'), true)
   assert.equal(isSafeUserSlug('a1-b2'), true)
+  // 宿主用户主键格式 project/user（两段）
+  assert.equal(isSafeUserSlug('erpm/testu'), true)
   assert.equal(isSafeUserSlug('../evil'), false)
   assert.equal(isSafeUserSlug('UPPER'), false)
-  assert.equal(isSafeUserSlug('a/b'), false)
+  assert.equal(isSafeUserSlug('a/b/c'), false)
+  assert.equal(isSafeUserSlug('/a'), false)
+  assert.equal(isSafeUserSlug('a/'), false)
+  assert.equal(isSafeUserSlug('a//b'), false)
+  assert.equal(isSafeUserSlug('a/../b'), false)
+  assert.equal(isSafeUserSlug('a__b'), false)
   assert.equal(isSafeUserSlug(''), false)
 })
 
@@ -71,6 +78,27 @@ test('pool: enterForUser 由 await 之后的原续体调用可生效（围栏时
     pool.enterForUser(auth.user.slug)
     createTask(handle, { ...INPUT, title: '续体路由' })
     assert.equal(pool.runForUser('u3', () => listTasks(handle).length), 1)
+    pool.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pool: 两段 slug（project/user）目录名转义与隔离', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-pool-'))
+  try {
+    const pool = new WorkbenchDbPool({ dataDir: dir })
+    const handle = pool.handle()
+    const created = pool.runForUser('erpm/testu', () => {
+      createTask(handle, INPUT)
+      return listTasks(handle).length
+    })
+    assert.equal(created, 1)
+    assert.equal(pool.runForUser('erpm/testu', () => listTasks(handle).length), 1)
+    // 默认库与其他用户不受影响
+    assert.equal(listTasks(handle).length, 0)
+    assert.equal(pool.userDbPath('erpm/testu'), join(dir, 'users', 'erpm__testu', 'workbench.db'))
+    assert.ok(existsSync(join(dir, 'users', 'erpm__testu', 'workbench.db')))
     pool.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

@@ -55,8 +55,10 @@ test('tenant: listTenantUsers 只保留活跃且有工作区的安全用户', as
       u2: { slug: 'u2', role: 'user', status: 'disabled', workspacePath: '/ws/erpm-u2' },
       admin: { slug: 'admin', role: 'admin', status: 'active', workspacePath: null },
       evil: { slug: '../evil', role: 'user', status: 'active', workspacePath: '/ws/evil' },
+      'erpm/t2': { slug: 'erpm/t2', role: 'user', status: 'active', workspacePath: '/ws/erpm-t2' },
     }, () => {
-      assert.deepEqual(listTenantUsers().map((u) => u.slug), ['u1'])
+      // 两段 slug（宿主真实用户主键格式）同样被识别
+      assert.deepEqual(listTenantUsers().map((u) => u.slug), ['u1', 'erpm/t2'])
     })
   } finally {
     rmSync(dir, { recursive: true, force: true })

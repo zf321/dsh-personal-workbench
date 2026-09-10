@@ -2,7 +2,7 @@
  * 多租户工作台数据库池：按用户隔离 SQLite 库。
  *
  * - 默认库（~/.dsh/workbench/workbench.db）服务本机回环请求，行为与单用户时代一致。
- * - 多租户用户各自持有 <dataDir>/users/<userSlug>/workbench.db，首次访问时懒打开
+ * - 多租户用户各自持有 <dataDir>/users/<slug 转义目录>/workbench.db（见 userSlugDirName），首次访问时懒打开
  *   （建目录 + PRAGMA + 迁移 + 字典种子）。
  * - 通过 AsyncLocalStorage 暴露“当前请求的库”：鉴权解析出用户后 enterForUser(slug)，
  *   同一请求链路里后续的 repo 调用自动落到该用户库；repo 层与百余处调用点零改动。
@@ -13,11 +13,22 @@ import type { DatabaseSync } from 'node:sqlite'
 import { defaultDbPath, openWorkbenchDb, type WorkbenchDbConfig } from './database.js'
 import { seedDictionaries } from './seed.js'
 
-const USER_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+const USER_SLUG_SEGMENT = '[a-z0-9][a-z0-9-]{0,63}'
 
-/** slug 是否可安全用作目录名（与 dsh-multi-tenant-projects 的 slug 格式一致）。 */
+/**
+ * 用户 slug 形状：宿主多租户插件的用户主键是 `project/user` 两段格式
+ * （userKey, 如 `erpm/testu`）; 兼容单段（admin 与历史注入数据）。
+ */
+const USER_SLUG_RE = new RegExp(`^${USER_SLUG_SEGMENT}(/${USER_SLUG_SEGMENT})?$`)
+
+/** slug 是否可安全用作目录名（每段形状安全; `/` 经 userSlugDirName 转义）。 */
 export function isSafeUserSlug(slug: string): boolean {
   return USER_SLUG_RE.test(slug)
+}
+
+/** 用户库目录名：`/` 以 `__` 转义（段内不允许下划线, 映射无歧义）。 */
+export function userSlugDirName(slug: string): string {
+  return slug.replace('/', '__')
 }
 
 export class WorkbenchDbPool {
@@ -52,9 +63,9 @@ export class WorkbenchDbPool {
     return this.store.run(this.forUser(slug), fn)
   }
 
-  /** 用户库文件路径（诊断 / 测试可见）。 */
+  /** 用户库文件路径（诊断 / 测试可见; 目录名经 userSlugDirName 转义）。 */
   userDbPath(slug: string): string {
-    return join(this.dataDir, 'users', slug, 'workbench.db')
+    return join(this.dataDir, 'users', userSlugDirName(slug), 'workbench.db')
   }
 
   /** 已打开的用户库快照（提醒调度等按用户轮询的场景使用）。 */
