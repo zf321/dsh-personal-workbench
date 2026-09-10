@@ -3,7 +3,7 @@
  * 迁移只前向；所有“枚举”都走 dictionaries 表。
  */
 import type { DatabaseSync } from 'node:sqlite';
-export declare const SCHEMA_VERSION = 14;
+export declare const SCHEMA_VERSION = 15;
 export interface Migration {
     version: number;
     name: string;

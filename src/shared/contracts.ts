@@ -270,3 +270,36 @@ export interface IdeasResponse { ok: true; ideas: IdeaView[] }
 export interface KnowledgeResponse { ok: true; entries: KnowledgeView[] }
 export interface IdeaClustersResponse { ok: true; clusters: IdeaClusterView[] }
 export interface DeletedResponse { ok: true; deleted: boolean }
+
+// ---------------------------------------------------------------------------
+// 个人 MCP 服务（工作台 → 设置 → MCP 服务）
+// ---------------------------------------------------------------------------
+
+export interface McpToolView {
+  name: string
+  description: string
+}
+
+/** 与 repo 的 McpServerRow 同形（headers 已解析为对象）；对话工具每次调用实时读取。 */
+export interface McpServerView {
+  id: string
+  name: string
+  url: string
+  transport: string
+  headers: Record<string, string>
+  enabled: number
+  sortOrder: number
+  timeoutMs: number
+  tools: McpToolView[]
+  toolsAt: string | null
+  lastStatus: string
+  lastError: string | null
+  lastCheckedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface McpProbeView { ok: boolean; error?: string }
+
+export interface McpServersResponse { ok: true; servers: McpServerView[] }
+export interface McpServerResponse { ok: true; server: McpServerView; probe?: McpProbeView }

@@ -19,6 +19,7 @@ import { authenticateWorkbenchRequest, enterWorkbenchAuthContext, fileBoundaryOf
 import { makeIdeaClusterRoutes } from './routes/idea-clusters.js'
 import { makeIdeaRoutes } from './routes/ideas.js'
 import { makeKnowledgeRoutes } from './routes/knowledge.js'
+import { makeMcpRoutes } from './routes/mcp.js'
 import { makePlanRoutes } from './routes/plans.js'
 import { makeReminderRoutes, type ReminderRouteDeps } from './routes/reminders.js'
 import { makeReportRoutes } from './routes/reports.js'
@@ -170,6 +171,7 @@ export function makeRoutes(db: DatabaseSync, deps: ReminderRouteDeps = {}): WebR
     ...makeAiSessionRoutes(db),
     ...makeReportRoutes(db),
     ...makePlanRoutes(db),
+    ...makeMcpRoutes(db),
     // ------------------------------------------------------------------ health
     {
       kind: 'exact',

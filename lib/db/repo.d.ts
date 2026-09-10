@@ -116,3 +116,5 @@ export { normalizeFileLink, assertValidFileLink, createKnowledge, getKnowledge, 
 export type { KnowledgeInput, KnowledgeRow } from './repo/knowledge.js';
 export { createIdea, getIdea, listIdeas, updateIdea, deleteIdea, createIdeaCluster, getIdeaCluster, listIdeaClusters, deleteIdeaCluster, listIdeaClustersForIdea, confirmIdeaClusterDraft, confirmIdeaTaskDraft, getPendingDraftForSession, } from './repo/ideas.js';
 export type { IdeaInput, IdeaRow, IdeaClusterInput, IdeaClusterRow } from './repo/ideas.js';
+export { MCP_TIMEOUT_DEFAULT_MS, MCP_TIMEOUT_MIN_MS, MCP_TIMEOUT_MAX_MS, normalizeMcpServerName, normalizeMcpServerUrl, normalizeMcpHeaders, clampMcpTimeoutMs, createMcpServer, getMcpServer, getMcpServerByName, listMcpServers, updateMcpServer, deleteMcpServer, recordMcpTools, recordMcpStatus, } from './repo/mcp.js';
+export type { McpServerInput, McpServerPatch, McpServerRow, McpToolInfo } from './repo/mcp.js';

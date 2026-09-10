@@ -10,3 +10,5 @@ export declare function updateTaskTool(db: DatabaseSync): import("@deepseek-ai/d
 export declare function submitReviewTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
 export declare function requestCompletionTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
 export declare function saveTaskMemoryTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function mcpListTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;
+export declare function mcpCallTool(db: DatabaseSync): import("@deepseek-ai/dsh-tools").ToolDefinition;

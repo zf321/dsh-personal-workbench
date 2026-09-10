@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 
 export interface Migration {
   version: number
@@ -364,6 +364,34 @@ export const MIGRATIONS: Migration[] = [
           created_at      TEXT NOT NULL
         ) STRICT;
         CREATE INDEX idx_draft_notify_next ON draft_notify_queue(next_attempt_at, created_at);
+      `)
+    },
+  },
+  {
+    version: 15,
+    name: 'personal-mcp-servers',
+    up(db) {
+      // 个人 MCP 服务：每个用户库各自一份；对话工具（workbench_mcp_list / workbench_mcp_call）
+      // 每次执行实时读取本表并即时连接 → 同一对话中增改/切换服务立即生效（不依赖 preset）。
+      db.exec(`
+        CREATE TABLE mcp_servers (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          url             TEXT NOT NULL,
+          transport       TEXT NOT NULL DEFAULT 'http',
+          headers_json    TEXT NOT NULL DEFAULT '{}',
+          enabled         INTEGER NOT NULL DEFAULT 1,
+          sort_order      INTEGER NOT NULL DEFAULT 0,
+          timeout_ms      INTEGER NOT NULL DEFAULT 30000,
+          tools_json      TEXT NOT NULL DEFAULT '[]',
+          tools_at        TEXT,
+          last_status     TEXT NOT NULL DEFAULT '',
+          last_error      TEXT,
+          last_checked_at TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX idx_mcp_servers_name ON mcp_servers(name);
       `)
     },
   },

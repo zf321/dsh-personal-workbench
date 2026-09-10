@@ -8,6 +8,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import type {
   ReminderBotOption, ReminderChannelStatus, ReminderOptionsView, ReminderPolicyView, WorkbenchSettings,
 } from '../../shared/contracts.js'
+import { McpPanel } from './McpPanel.js'
 import { Modal } from './Modal.js'
 
 export interface DictionaryLike {
@@ -20,7 +21,7 @@ export interface DictionaryLike {
   sortOrder?: number
 }
 
-type Section = 'general' | 'notify' | 'wechat' | 'dict'
+type Section = 'general' | 'mcp' | 'notify' | 'wechat' | 'dict'
 type DictKind = 'type' | 'status' | 'priority' | 'idea_kind'
 
 /** 草稿通知类型选项（与后端 policy.draftNotifyKinds 的取值对齐）。 */
@@ -35,6 +36,7 @@ const DRAFT_NOTIFY_OPTIONS: Array<{ code: string; label: string }> = [
 
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: '通用' },
+  { key: 'mcp', label: 'MCP 服务' },
   { key: 'notify', label: '通知' },
   { key: 'wechat', label: '微信提醒' },
   { key: 'dict', label: '字典管理' },
@@ -156,6 +158,8 @@ export function SettingsModal(props: SettingsModalProps): ReactNode {
               </label>
             </section>
           )}
+
+          {section === 'mcp' && <McpPanel />}
 
           {section === 'notify' && (
             <section>
