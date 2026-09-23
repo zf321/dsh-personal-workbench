@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { openWorkbenchDb } from '../lib/db/database.js'
-import { seedDictionaries } from '../lib/db/seed.js'
+import { seedDefaultMcpServers, seedDictionaries } from '../lib/db/seed.js'
 import { makeRoutes } from '../lib/api/routes.js'
 import {
   clampMcpTimeoutMs, createMcpServer, deleteMcpServer, getMcpServer, getMcpServerByName, listMcpServers,
@@ -403,4 +403,27 @@ test('mcp tools: list/call 实时读取用户配置', async () => {
       assert.equal(getMcpServerByName(db, '地图服务').lastStatus, 'ok')
     } finally { db.close() }
   })
+})
+
+// ---------------------------------------------------------------------------
+// 平台预置种子（db-mcp）
+// ---------------------------------------------------------------------------
+
+test('mcp seed: 新库播种后 workbench_mcp_list 立即可列出（未探测状态）', async () => {
+  const db = openWorkbenchDb({ dbPath: ':memory:' })
+  try {
+    seedDefaultMcpServers(db)
+    const list = mcpListTool(db)
+    const out = await list.execute({})
+    assert.ok(out.includes('db-mcp'))
+    assert.ok(out.includes('尚未探测'))
+    const rows = listMcpServers(db)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].url, 'http://db-mcp:5000/mcp')
+    assert.equal(rows[0].enabled, 1)
+
+    // 重复播种幂等：不新增第二条，也不覆盖（用户可自由改名/停用）
+    seedDefaultMcpServers(db)
+    assert.equal(listMcpServers(db).length, 1)
+  } finally { db.close() }
 })

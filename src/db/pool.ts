@@ -3,7 +3,7 @@
  *
  * - 默认库（~/.dsh/workbench/workbench.db）服务本机回环请求，行为与单用户时代一致。
  * - 多租户用户各自持有 <dataDir>/users/<slug 转义目录>/workbench.db（见 userSlugDirName），首次访问时懒打开
- *   （建目录 + PRAGMA + 迁移 + 字典种子）。
+ *   （建目录 + PRAGMA + 迁移 + 字典/默认 MCP 服务种子）。
  * - 通过 AsyncLocalStorage 暴露“当前请求的库”：鉴权解析出用户后 enterForUser(slug)，
  *   同一请求链路里后续的 repo 调用自动落到该用户库；repo 层与百余处调用点零改动。
  */
@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { dirname, join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { defaultDbPath, openWorkbenchDb, type WorkbenchDbConfig } from './database.js'
-import { seedDictionaries } from './seed.js'
+import { seedDefaultMcpServers, seedDictionaries } from './seed.js'
 
 const USER_SLUG_SEGMENT = '[a-z0-9][a-z0-9-]{0,63}'
 
@@ -107,6 +107,8 @@ export class WorkbenchDbPool {
   private openAt(dbPath: string): DatabaseSync {
     const db = openWorkbenchDb({ dbPath })
     seedDictionaries(db)
+    // 平台预置 MCP 服务（db-mcp）：库首次打开时播种一次（见 seed.ts；删除后不再恢复）。
+    seedDefaultMcpServers(db)
     return db
   }
 }

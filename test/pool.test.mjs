@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { openWorkbenchDb } from '../lib/db/database.js'
 import { WorkbenchDbPool, isSafeUserSlug } from '../lib/db/pool.js'
-import { createTask, listTasks } from '../lib/db/repo.js'
+import { createMcpServer, createTask, deleteMcpServer, listMcpServers, listTasks } from '../lib/db/repo.js'
 
 const INPUT = { title: '池隔离测试', typeCode: 'client_meeting', priorityCode: 'p2' }
 
@@ -99,6 +100,64 @@ test('pool: 两段 slug（project/user）目录名转义与隔离', () => {
     assert.equal(listTasks(handle).length, 0)
     assert.equal(pool.userDbPath('erpm/testu'), join(dir, 'users', 'erpm__testu', 'workbench.db'))
     assert.ok(existsSync(join(dir, 'users', 'erpm__testu', 'workbench.db')))
+    pool.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pool: 用户库首次打开即写入默认 MCP 服务种子（db-mcp）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-pool-'))
+  try {
+    const pool = new WorkbenchDbPool({ dataDir: dir })
+    const handle = pool.handle()
+    const rows = pool.runForUser('u4', () => listMcpServers(handle))
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].name, 'db-mcp')
+    assert.equal(rows[0].url, 'http://db-mcp:5000/mcp')
+    assert.equal(rows[0].enabled, 1)
+    assert.equal(rows[0].sortOrder, 10)
+    // 默认库（回环/管理员）同样播种
+    assert.equal(listMcpServers(handle).length, 1)
+    pool.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pool: 默认 MCP 种子只播种一次（删除后重开不复原）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-pool-'))
+  try {
+    const pool = new WorkbenchDbPool({ dataDir: dir })
+    const seeded = pool.runForUser('u5', () => listMcpServers(pool.handle())[0])
+    assert.equal(seeded.name, 'db-mcp')
+    pool.runForUser('u5', () => { deleteMcpServer(pool.handle(), seeded.id) })
+    assert.equal(pool.runForUser('u5', () => listMcpServers(pool.handle()).length), 0)
+    pool.close()
+
+    // 模拟进程重启：重开同一数据目录，已删除的预置服务不被重新播回
+    const restarted = new WorkbenchDbPool({ dataDir: dir })
+    assert.equal(restarted.runForUser('u5', () => listMcpServers(restarted.handle()).length), 0)
+    restarted.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pool: 用户已手工添加同 URL 服务时不重复播种', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wb-pool-'))
+  try {
+    // 先按用户库路径手工建库并添加同 URL 服务（模拟播种前用户已自行配置）
+    const dbPath = join(dir, 'users', 'u6', 'workbench.db')
+    mkdirSync(dirname(dbPath), { recursive: true })
+    const raw = openWorkbenchDb({ dbPath })
+    createMcpServer(raw, { name: '我的数据库', url: 'http://db-mcp:5000/mcp' })
+    raw.close()
+
+    const pool = new WorkbenchDbPool({ dataDir: dir })
+    const rows = pool.runForUser('u6', () => listMcpServers(pool.handle()))
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].name, '我的数据库')
     pool.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

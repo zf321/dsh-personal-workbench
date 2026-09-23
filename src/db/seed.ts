@@ -2,6 +2,8 @@
  * 出厂字典种子。INSERT OR IGNORE：首次安装写入，之后用户改名/停用不会被覆盖。
  */
 import type { DatabaseSync } from 'node:sqlite'
+import { createMcpServer } from './repo/mcp.js'
+import { readMeta, writeMeta } from './repo/meta.js'
 
 export interface DictionarySeed {
   kind: string
@@ -107,5 +109,43 @@ export function seedDictionaries(db: DatabaseSync, now: string = new Date().toIS
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 平台预置 MCP 服务种子（erpm 平台：db-mcp 业务数据库只读查询）。
+//
+// 与字典种子的差异：用 meta 标记保证「只播种一次」—— 用户在设置面板里删除/改名后
+// 不再恢复（尊重用户意志）；用户已手工添加同 URL 服务时只写标记、不重复插入。
+// 标记按服务独立：未来新增预置服务用新键，存量库下次打开自动补种该项。
+// ---------------------------------------------------------------------------
+
+export interface McpServerSeed {
+  /** 播种标记（meta 键；写入后视为已播过，无论用户后续如何改动该记录） */
+  metaKey: string
+  name: string
+  url: string
+  sortOrder: number
+}
+
+export const DEFAULT_MCP_SERVERS: McpServerSeed[] = [
+  // MCP Toolbox 多库只读（erp/ac/dingd Oracle + erpm/weberp MySQL），与 dsh 同
+  // namespace（dsh-erpm），ClusterIP 仅内网可达、无独立鉴权（只读账号兜底），
+  // 见 erpm-dsh 仓库 k8s/db-mcp.yaml。
+  { metaKey: 'seed_mcp_db_mcp_v1', name: 'db-mcp', url: 'http://db-mcp:5000/mcp', sortOrder: 10 },
+]
+
+/**
+ * 首次打开库时播种平台预置 MCP 服务（默认库与每个用户库均执行）。
+ * 幂等：meta 标记短路 + 同名/同 URL 查重（用户已自行配置过则不重复插入）。
+ */
+export function seedDefaultMcpServers(db: DatabaseSync, now: string = new Date().toISOString()): void {
+  for (const seed of DEFAULT_MCP_SERVERS) {
+    if (readMeta(db, seed.metaKey) !== undefined) continue
+    const exists = db.prepare('SELECT id FROM mcp_servers WHERE name = ? OR url = ? LIMIT 1').get(seed.name, seed.url)
+    if (exists === undefined) {
+      createMcpServer(db, { name: seed.name, url: seed.url, sortOrder: seed.sortOrder }, now)
+    }
+    writeMeta(db, seed.metaKey, now)
   }
 }

@@ -37,7 +37,7 @@ const WORKBENCH_GUIDANCE = [
   'V2 提醒：任务到期提醒由工作台自动弹出页面横幅与桌面通知；不要用其他方式重复提醒。',
   '知识库：值得沉淀的经验教训/决策/笔记请调用 workbench_submit_knowledge 提交知识草稿（kind_code/tags）；如来自本地文档，应同时传入 file_link（file:// 或绝对路径）用于追溯；用户确认后入库；复盘时优先考虑。',
   '点子/点子王：关联点子请调用 workbench_propose_idea_clusters；头脑风暴落地请调用 workbench_submit_idea_tasks。都只写草稿，用户确认后才生效。',
-  '个人 MCP：用户在「工作台 → 设置 → MCP 服务」里配置了个人 MCP 服务（内部/自建工具）时，先调用 workbench_mcp_list 查看当前可用服务与工具，再按需调用 workbench_mcp_call；配置随时可能增删/变更，不要凭记忆猜测工具名。',
+  '个人 MCP：工作台已预置平台 MCP 服务（如 db-mcp：业务数据库只读 SQL 查询），用户也可在「工作台 → 设置 → MCP 服务」里增删自己的服务；涉及数据库查询或内部工具时，先调用 workbench_mcp_list 查看当前可用服务与工具，再按需调用 workbench_mcp_call。配置随时可能增删/变更，不要凭记忆猜测工具名。',
   '用户提到「工作台 / 任务 / 日历 / 提醒 / 子任务 / 计划 / 日报周报」时即指本插件，请据此协作。',
 ].join('')
 
