@@ -107,7 +107,7 @@ export class WorkbenchDbPool {
   private openAt(dbPath: string): DatabaseSync {
     const db = openWorkbenchDb({ dbPath })
     seedDictionaries(db)
-    // 平台预置 MCP 服务（db-mcp）：库首次打开时播种一次（见 seed.ts；删除后不再恢复）。
+    // 平台预置 MCP 服务（db-mcp / ocr-mcp）：库首次打开时播种一次（见 seed.ts；删除后不再恢复）。
     seedDefaultMcpServers(db)
     return db
   }

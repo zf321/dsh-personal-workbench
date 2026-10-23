@@ -406,7 +406,7 @@ test('mcp tools: list/call 实时读取用户配置', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 平台预置种子（db-mcp）
+// 平台预置种子（db-mcp + ocr-mcp）
 // ---------------------------------------------------------------------------
 
 test('mcp seed: 新库播种后 workbench_mcp_list 立即可列出（未探测状态）', async () => {
@@ -416,14 +416,17 @@ test('mcp seed: 新库播种后 workbench_mcp_list 立即可列出（未探测�
     const list = mcpListTool(db)
     const out = await list.execute({})
     assert.ok(out.includes('db-mcp'))
+    assert.ok(out.includes('ocr-mcp'))
     assert.ok(out.includes('尚未探测'))
     const rows = listMcpServers(db)
-    assert.equal(rows.length, 1)
+    assert.equal(rows.length, 2)
     assert.equal(rows[0].url, 'http://db-mcp:5000/mcp')
     assert.equal(rows[0].enabled, 1)
+    assert.equal(rows[1].url, 'http://ocr-mcp:8080/mcp')
+    assert.equal(rows[1].enabled, 1)
 
-    // 重复播种幂等：不新增第二条，也不覆盖（用户可自由改名/停用）
+    // 重复播种幂等：不新增第三条，也不覆盖（用户可自由改名/停用）
     seedDefaultMcpServers(db)
-    assert.equal(listMcpServers(db).length, 1)
+    assert.equal(listMcpServers(db).length, 2)
   } finally { db.close() }
 })

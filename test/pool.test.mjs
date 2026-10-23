@@ -106,19 +106,22 @@ test('pool: 两段 slug（project/user）目录名转义与隔离', () => {
   }
 })
 
-test('pool: 用户库首次打开即写入默认 MCP 服务种子（db-mcp）', () => {
+test('pool: 用户库首次打开即写入默认 MCP 服务种子（db-mcp + ocr-mcp）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'wb-pool-'))
   try {
     const pool = new WorkbenchDbPool({ dataDir: dir })
     const handle = pool.handle()
     const rows = pool.runForUser('u4', () => listMcpServers(handle))
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0].name, 'db-mcp')
+    assert.equal(rows.length, 2)
+    assert.deepEqual(rows.map((row) => row.name), ['db-mcp', 'ocr-mcp'])
     assert.equal(rows[0].url, 'http://db-mcp:5000/mcp')
     assert.equal(rows[0].enabled, 1)
     assert.equal(rows[0].sortOrder, 10)
+    assert.equal(rows[1].url, 'http://ocr-mcp:8080/mcp')
+    assert.equal(rows[1].enabled, 1)
+    assert.equal(rows[1].sortOrder, 20)
     // 默认库（回环/管理员）同样播种
-    assert.equal(listMcpServers(handle).length, 1)
+    assert.equal(listMcpServers(handle).length, 2)
     pool.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -132,12 +135,18 @@ test('pool: 默认 MCP 种子只播种一次（删除后重开不复原）', () 
     const seeded = pool.runForUser('u5', () => listMcpServers(pool.handle())[0])
     assert.equal(seeded.name, 'db-mcp')
     pool.runForUser('u5', () => { deleteMcpServer(pool.handle(), seeded.id) })
-    assert.equal(pool.runForUser('u5', () => listMcpServers(pool.handle()).length), 0)
+    assert.deepEqual(
+      pool.runForUser('u5', () => listMcpServers(pool.handle()).map((row) => row.name)),
+      ['ocr-mcp'],
+    )
     pool.close()
 
     // 模拟进程重启：重开同一数据目录，已删除的预置服务不被重新播回
     const restarted = new WorkbenchDbPool({ dataDir: dir })
-    assert.equal(restarted.runForUser('u5', () => listMcpServers(restarted.handle()).length), 0)
+    assert.deepEqual(
+      restarted.runForUser('u5', () => listMcpServers(restarted.handle()).map((row) => row.name)),
+      ['ocr-mcp'],
+    )
     restarted.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -156,8 +165,8 @@ test('pool: 用户已手工添加同 URL 服务时不重复播种', () => {
 
     const pool = new WorkbenchDbPool({ dataDir: dir })
     const rows = pool.runForUser('u6', () => listMcpServers(pool.handle()))
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0].name, '我的数据库')
+    // 同 URL 的 db-mcp 不重复插入，但另一项预置服务（ocr-mcp）照常播种
+    assert.deepEqual(rows.map((row) => row.name), ['我的数据库', 'ocr-mcp'])
     pool.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

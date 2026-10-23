@@ -113,7 +113,7 @@ export function seedDictionaries(db: DatabaseSync, now: string = new Date().toIS
 }
 
 // ---------------------------------------------------------------------------
-// 平台预置 MCP 服务种子（erpm 平台：db-mcp 业务数据库只读查询）。
+// 平台预置 MCP 服务种子（erpm 平台：db-mcp 业务数据库只读查询、ocr-mcp AI 代码审查）。
 //
 // 与字典种子的差异：用 meta 标记保证「只播种一次」—— 用户在设置面板里删除/改名后
 // 不再恢复（尊重用户意志）；用户已手工添加同 URL 服务时只写标记、不重复插入。
@@ -133,6 +133,10 @@ export const DEFAULT_MCP_SERVERS: McpServerSeed[] = [
   // namespace（dsh-erpm），ClusterIP 仅内网可达、无独立鉴权（只读账号兜底），
   // 见 erpm-dsh 仓库 k8s/db-mcp.yaml。
   { metaKey: 'seed_mcp_db_mcp_v1', name: 'db-mcp', url: 'http://db-mcp:5000/mcp', sortOrder: 10 },
+  // OpenCodeReview AI 代码审查（ocr review/scan 包装为 MCP：ocr_review /
+  // ocr_scan / ocr_health），同 namespace，ClusterIP 仅内网可达；审查以工作区
+  // 仓库为 cwd，见 erpm-dsh 仓库 k8s/ocr-mcp.yaml。
+  { metaKey: 'seed_mcp_ocr_mcp_v1', name: 'ocr-mcp', url: 'http://ocr-mcp:8080/mcp', sortOrder: 20 },
 ]
 
 /**
