@@ -422,7 +422,7 @@ test('mcp seed: 新库播种后 workbench_mcp_list 立即可列出（未探测�
     assert.equal(rows.length, 2)
     assert.equal(rows[0].url, 'http://db-mcp:5000/mcp')
     assert.equal(rows[0].enabled, 1)
-    assert.equal(rows[1].url, 'http://ocr-mcp:8080/mcp')
+    assert.equal(rows[1].url, 'http://ocr-mcp-api:8080/mcp')
     assert.equal(rows[1].enabled, 1)
 
     // 重复播种幂等：不新增第三条，也不覆盖（用户可自由改名/停用）
