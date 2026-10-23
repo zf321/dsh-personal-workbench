@@ -120,6 +120,7 @@ test('pool: 用户库首次打开即写入默认 MCP 服务种子（db-mcp + ocr
     assert.equal(rows[1].url, 'http://ocr-mcp-api:8080/mcp')
     assert.equal(rows[1].enabled, 1)
     assert.equal(rows[1].sortOrder, 20)
+    assert.equal(rows[1].timeoutMs, 1800000)
     // 默认库（回环/管理员）同样播种
     assert.equal(listMcpServers(handle).length, 2)
     pool.close()

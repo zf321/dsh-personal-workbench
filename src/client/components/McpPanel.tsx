@@ -185,7 +185,7 @@ export function McpPanel(): ReactNode {
       {form !== null && (
         <form className="wb-form" style={{ marginBottom: 10 }} onSubmit={(event) => { event.preventDefault(); void save() }}>
           <label>服务名<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：地图服务（对话中按这个名字调用）" /></label>
-          <label>超时（秒）<input type="number" min={3} max={120} value={form.timeoutSeconds} onChange={(e) => setForm({ ...form, timeoutSeconds: e.target.value })} /></label>
+          <label>超时（秒）<input type="number" min={3} max={1800} value={form.timeoutSeconds} onChange={(e) => setForm({ ...form, timeoutSeconds: e.target.value })} /></label>
           <label className="full">服务地址<input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="例如：http://10.6.9.61:8100/mcp（内网 StreamableHTTP 地址）" /></label>
           <label className="full">
             请求头（每行一条，可留空）

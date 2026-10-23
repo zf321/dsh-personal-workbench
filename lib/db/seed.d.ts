@@ -17,6 +17,8 @@ export interface McpServerSeed {
     name: string;
     url: string;
     sortOrder: number;
+    /** 调用超时（毫秒）；不填用默认 30s。长任务服务（如 ocr 审查）按需放大。 */
+    timeoutMs?: number;
 }
 export declare const DEFAULT_MCP_SERVERS: McpServerSeed[];
 /**

@@ -148,7 +148,7 @@ test('mcp repo: 校验规则与边界', () => {
   assert.equal(clampMcpTimeoutMs(undefined), 30000)
   assert.equal(clampMcpTimeoutMs(5000), 5000)
   assert.equal(clampMcpTimeoutMs(100), 3000)
-  assert.equal(clampMcpTimeoutMs(9e9), 120000)
+  assert.equal(clampMcpTimeoutMs(9e9), 1800000)
 })
 
 test('mcp repo: CRUD 全流程', () => {
@@ -170,10 +170,10 @@ test('mcp repo: CRUD 全流程', () => {
     // 名称唯一（对话工具按名调用，同库内不可重名）
     assert.throws(() => createMcpServer(db, { name: '地图服务', url: 'http://x/mcp' }), /already exists/)
 
-    const updated = updateMcpServer(db, created.id, { name: '地图服务2', enabled: false, timeoutMs: 999999 })
+    const updated = updateMcpServer(db, created.id, { name: '地图服务2', enabled: false, timeoutMs: 9e9 })
     assert.equal(updated.name, '地图服务2')
     assert.equal(updated.enabled, 0)
-    assert.equal(updated.timeoutMs, 120000)
+    assert.equal(updated.timeoutMs, 1800000)
     assert.equal(updateMcpServer(db, 'no-such-id', { name: 'x' }), undefined)
 
     assert.equal(deleteMcpServer(db, created.id), true)

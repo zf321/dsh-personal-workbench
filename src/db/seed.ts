@@ -126,6 +126,8 @@ export interface McpServerSeed {
   name: string
   url: string
   sortOrder: number
+  /** 调用超时（毫秒）；不填用默认 30s。长任务服务（如 ocr 审查）按需放大。 */
+  timeoutMs?: number
 }
 
 export const DEFAULT_MCP_SERVERS: McpServerSeed[] = [
@@ -137,7 +139,8 @@ export const DEFAULT_MCP_SERVERS: McpServerSeed[] = [
   // ocr_scan / ocr_health），同 namespace，ClusterIP 仅内网可达；审查以工作区
   // 仓库为 cwd。指向专用实例 ocr-mcp-api（只跑 MCP，不跑定时审查/viewer），
   // 与主服务 ocr-mcp 分工，见 erpm-dsh 仓库 k8s/ocr-mcp.yaml。
-  { metaKey: 'seed_mcp_ocr_mcp_v1', name: 'ocr-mcp', url: 'http://ocr-mcp-api:8080/mcp', sortOrder: 20 },
+  // 单次审查最长 1800s（服务端 OCR_MCP_TIMEOUT_SEC），平台侧调用超时同为 30 分钟。
+  { metaKey: 'seed_mcp_ocr_mcp_v1', name: 'ocr-mcp', url: 'http://ocr-mcp-api:8080/mcp', sortOrder: 20, timeoutMs: 1_800_000 },
 ]
 
 /**
@@ -149,7 +152,7 @@ export function seedDefaultMcpServers(db: DatabaseSync, now: string = new Date()
     if (readMeta(db, seed.metaKey) !== undefined) continue
     const exists = db.prepare('SELECT id FROM mcp_servers WHERE name = ? OR url = ? LIMIT 1').get(seed.name, seed.url)
     if (exists === undefined) {
-      createMcpServer(db, { name: seed.name, url: seed.url, sortOrder: seed.sortOrder }, now)
+      createMcpServer(db, { name: seed.name, url: seed.url, sortOrder: seed.sortOrder, timeoutMs: seed.timeoutMs }, now)
     }
     writeMeta(db, seed.metaKey, now)
   }

@@ -39,7 +39,7 @@ export interface McpServerRow {
 }
 export declare const MCP_TIMEOUT_DEFAULT_MS = 30000;
 export declare const MCP_TIMEOUT_MIN_MS = 3000;
-export declare const MCP_TIMEOUT_MAX_MS = 120000;
+export declare const MCP_TIMEOUT_MAX_MS = 1800000;
 /** 服务名：1-64 字符，同一用户下唯一（对话工具按名调用）。 */
 export declare function normalizeMcpServerName(raw: string): string;
 /** 服务地址：仅允许 http/https（StreamableHTTP 传输）。归一化后存储。 */
